@@ -29,6 +29,7 @@
   <groupId>org.terracotta</groupId>
   <artifactId>terracotta-utilities-tools</artifactId>
   <name>Terracotta Utilities Tools</name>
+  <description>Utility classes/methods for common Java tasks</description>
   <url>https://github.com/Terracotta-OSS/terracotta-utilities/</url>
 
   <licenses>
@@ -68,5 +69,20 @@
       <scope>test</scope>
     </dependency>
   </dependencies>
+
+  <scm>
+    <connection>scm:git:https://github.com/terracotta-oss/terracotta-utilities.git</connection>
+    <developerConnection>scm:git:git@github.com:terracotta-oss/terracotta-utilities.git</developerConnection>
+    <url>https://github.com/terracotta-oss/terracotta-utilities</url>
+  </scm>
+
+  <developers>
+    <developer>
+      <name>Clifford W Johnson</name>
+      <email>clifford.johnson@softwareag.com</email>
+      <organization>Terracotta Inc., a wholly-owned subsidiary of Software AG USA, Inc.</organization>
+      <organizationUrl>https://terracotta.org</organizationUrl>
+    </developer>
+  </developers>
 
 </project>

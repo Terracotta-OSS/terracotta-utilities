@@ -30,6 +30,7 @@
   <artifactId>terracotta-utilities-test-tools</artifactId>
   <version>0.0.1-SNAPSHOT</version>
   <name>Terracotta Utilities Test Tools</name>
+  <description>Utility classes/methods for use in testing</description>
   <url>https://github.com/Terracotta-OSS/terracotta-utilities/</url>
 
   <licenses>
@@ -82,5 +83,20 @@
       </plugin>
     </plugins>
   </build>
+
+  <scm>
+    <connection>scm:git:https://github.com/terracotta-oss/terracotta-utilities.git</connection>
+    <developerConnection>scm:git:git@github.com:terracotta-oss/terracotta-utilities.git</developerConnection>
+    <url>https://github.com/terracotta-oss/terracotta-utilities</url>
+  </scm>
+
+  <developers>
+    <developer>
+      <name>Clifford W Johnson</name>
+      <email>clifford.johnson@softwareag.com</email>
+      <organization>Terracotta Inc., a wholly-owned subsidiary of Software AG USA, Inc.</organization>
+      <organizationUrl>https://terracotta.org</organizationUrl>
+    </developer>
+  </developers>
 
 </project>
