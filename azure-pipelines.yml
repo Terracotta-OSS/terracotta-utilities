@@ -25,3 +25,10 @@ resources:
 
 jobs:
 - template: build-templates/maven-common.yml@templates  
+  parameters:
+    jobName: 'Linux'
+    
+- template: build-templates/maven-common.yml@templates
+  parameters:
+    vmImage: 'windows-latest'
+    jobName: 'Windows'
