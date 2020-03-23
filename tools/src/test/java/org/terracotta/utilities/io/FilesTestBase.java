@@ -26,6 +26,7 @@ import org.junit.rules.TestName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.terracotta.org.junit.rules.TemporaryFolder;
+import org.terracotta.utilities.exec.Shell;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
@@ -73,6 +74,7 @@ import static java.nio.file.Files.readSymbolicLink;
 import static java.nio.file.Files.write;
 import static java.util.Collections.singleton;
 import static java.util.Objects.requireNonNull;
+import static org.terracotta.utilities.exec.Shell.execute;
 
 /**
  * Provides the foundation for testing {@link Files}.
@@ -120,8 +122,50 @@ public abstract class FilesTestBase {
   public static void prepareCommon() throws IOException {
     /*
      * Create the root directory that contains both the source tree and the target for each test.
+     *
+     * Some Java path support methods don't operate as expected in the presence of
+     * Windows 8dot3 short names so, under Windows, we try to get the test root
+     * folder to be in 8dot3 form if it's not already.  Path.toRealPath(...)
+     * returns a long file name.
      */
-    root = TEST_ROOT.newFolder("root").toPath();               // root
+    root = null;
+    if (isWindows) {
+      Path testRoot = TEST_ROOT.getRoot().toPath();
+      if (testRoot.equals(testRoot.toRealPath(LinkOption.NOFOLLOW_LINKS))) {
+        /*
+         * TEST_ROOT does not have an 8dot3 component ... attempt to make one.
+         * If the drive on which TEST_ROOT resides does not support 8dot3 names,
+         * the 'FOR ... ECHO %~sF' statement returns the long name instead of the
+         * 8dot3 name.
+         */
+        Path rootCandidate = TEST_ROOT.newFolder("rootWithLongName").toPath();
+        LOGGER.debug("Attempting to produce an 8dot3 root from \"{}\"", rootCandidate);
+        Shell.Result result = execute(Shell.Encoding.CHARSET, "cmd", "/C",
+            "@FOR /F \"delims=\" %F IN (\"" + rootCandidate.toString() + "\") DO @ECHO %~sF");
+        if (result.exitCode() == 0) {
+          try {
+            Path eightDot3Path = Paths.get(result.lines().get(0));
+            if (eightDot3Path.equals(rootCandidate)) {
+              LOGGER.warn("******************************************************************************\n" +
+                      "8dot3 support is not available for drive {}\n" +
+                      "******************************************************************************",
+                  eightDot3Path.getRoot());
+            } else {
+              root = eightDot3Path;                                 // root
+              LOGGER.info("Using 8dot3 root of \"{}\"", root);
+            }
+          } catch (Exception e) {
+            LOGGER.warn("Failed to determine 8dot3 from \"{}\"", rootCandidate, e);
+            // dealt with below
+          }
+        }
+      } else {
+        LOGGER.debug("Using 8dot3 base of \"{}\"", testRoot);
+      }
+    }
+    if (root == null) {
+      root = TEST_ROOT.newFolder("root").toPath();               // root
+    }
     sourceTree = createDirectory(root.resolve("source"));
 
     /*

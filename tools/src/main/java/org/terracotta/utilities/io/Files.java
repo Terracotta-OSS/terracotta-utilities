@@ -64,6 +64,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.WeakHashMap;
 import java.util.concurrent.Callable;
@@ -82,6 +83,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static java.nio.file.Files.isDirectory;
+import static java.nio.file.Files.isSameFile;
 import static java.nio.file.Files.isSymbolicLink;
 import static java.nio.file.LinkOption.NOFOLLOW_LINKS;
 import static java.nio.file.StandardCopyOption.COPY_ATTRIBUTES;
@@ -613,7 +615,7 @@ public final class Files {
      * This is obviously a race but there's little that can be done about it.
      */
     if (java.nio.file.Files.exists(resolvedTarget, NOFOLLOW_LINKS)) {
-      if (java.nio.file.Files.isSameFile(specifiedSource.toRealPath(linkOptions), resolvedTarget)) {
+      if (isSameFile(specifiedSource.toRealPath(linkOptions), resolvedTarget)) {
         return target;
       }
 
@@ -1142,6 +1144,56 @@ public final class Files {
     }
 
     /**
+     * Determines if a path is contained in the tree rooted by another.  This
+     * method is used instead of {@link Path#startsWith(Path)} to properly handle
+     * differences observed under Windows with short- versus long-names under Windows.
+     * <p>
+     * Both the {@code tree} and {@code candidate} paths must be non-relative
+     *
+     * @param tree the root of the tree in which {@code candidate} is tested for residence
+     * @param candidate the candidate {@code Path} to test
+     * @return an {@code Optional} containing the relative path between {@code tree} and {@code candidate}
+     *      iff {@code candidate} is within {@code tree}; otherwise an {@code Optional.empty()}
+     */
+    @SuppressFBWarnings("NP_NULL_ON_SOME_PATH_FROM_RETURN_VALUE")
+    private Optional<Path> containedBy(Path tree, Path candidate) {
+      if (!tree.isAbsolute()) {
+        throw new IllegalArgumentException("tree (\"" + tree + "\") must be non-relative");
+      }
+      if (!candidate.isAbsolute()) {
+        throw new IllegalArgumentException("candidate (\"" + candidate + "\") must be non-relative");
+      }
+      try {
+        int prefixCount = tree.getNameCount();
+        int childCount = candidate.getNameCount();
+
+        if (prefixCount == 0) {
+          // The tree is a root-only path
+          if (tree.getRoot() == null) {
+            return Optional.empty();
+          } else {
+            return isSameFile(tree, candidate.getRoot()) ? Optional.of(Paths.get("")) : Optional.empty();
+          }
+        } else if (childCount >= prefixCount) {
+          // WHAT?! -- Path.subpath drops the root (at least on Windows)
+          Path candidateRoot = candidate.getRoot().resolve(candidate.subpath(0, prefixCount));
+          boolean isSame = isSameFile(tree, candidateRoot);
+          return isSame ? Optional.of(candidateRoot.relativize(candidate)) : Optional.empty();
+        } else {
+          return Optional.empty();
+        }
+
+      } catch (Exception e) {
+        if (LOGGER.isTraceEnabled()) {
+          LOGGER.trace("containedBy({}, {}) failed", tree, candidate, e);
+        } else {
+          LOGGER.debug("containedBy({}, {}) failed with {}", tree, candidate, e.toString());
+        }
+        return Optional.empty();
+      }
+    }
+
+    /**
      * Create the target directories using {@link java.nio.file.Files#copy(Path, Path, CopyOption...)}
      * to in order to copy the directory attributes if requested.
      * @param dir the source directory to copy
@@ -1216,9 +1268,10 @@ public final class Files {
            * The target is absolute.  If it's within the source tree, create a
            * relocated link.  Otherwise, process as "foreign" content.
            */
-          if (linkTarget.startsWith(source)) {
+          Optional<Path> relativeLink = containedBy(source, linkTarget);
+          if (relativeLink.isPresent()) {
             // Create link to new spot within target
-            Path relocatedLinkTarget = relocate(linkTarget);
+            Path relocatedLinkTarget = target.resolve(relativeLink.get()).normalize();
             if (isWindowsDirectoryLink) {
               createWindowsDirectorySymbolicLink(targetFile, relocatedLinkTarget);
             } else {
@@ -1235,8 +1288,8 @@ public final class Files {
            * parent and, if the result is within the source tree, create a relocated
            * link.  Otherwise, process as "foreign" content.
            */
-          Path resolvedLinkTarget = file.resolveSibling(linkTarget).toAbsolutePath();
-          if (resolvedLinkTarget.startsWith(source)) {
+          Path resolvedLinkTarget = file.resolveSibling(linkTarget).normalize().toAbsolutePath();
+          if (containedBy(source, resolvedLinkTarget).isPresent()) {
             // Create relative link to new spot within target
             if (isWindowsDirectoryLink) {
               createWindowsDirectorySymbolicLink(targetFile, linkTarget);
