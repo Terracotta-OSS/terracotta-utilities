@@ -87,7 +87,7 @@ public final class Shell {
 
     private Result(int exitCode, List<String> commandLines) {
       this.exitCode = exitCode;
-      this.commandLines = requireNonNull(Collections.unmodifiableList(commandLines), "commandLines");
+      this.commandLines = Collections.unmodifiableList(commandLines);
     }
 
     /**
@@ -188,33 +188,39 @@ public final class Shell {
      * @return the {@code Charset} representing the encoding to use for decoding of command output lines
      */
     private static Charset getShellEncoding() {
-      Charset javaBasedSystemEncoding;
-      found: {
-        for (String property : Arrays.asList("sun.stdout.encoding", "sun.jnu.encoding")) {
-          String encoding = System.getProperty(property);
-          if (encoding != null && Charset.isSupported(encoding)) {
-            javaBasedSystemEncoding = Charset.forName(encoding);
-            break found;
-          }
-        }
-        javaBasedSystemEncoding = Charset.defaultCharset();
-      }
-      if (!IS_WINDOWS) {
-        return javaBasedSystemEncoding;      // Use the locale-based encoding
-      }
+      Charset javaBasedSystemEncoding = getJavaBasedSystemEncoding();
 
-      try {
-        for (String line : execute(javaBasedSystemEncoding, "cmd", "/C", "chcp")) {
-          String[] parts = line.split(":\\s*");
-          if (parts.length == 2 && parts[1].matches("\\d+")) {
-            return Charset.forName(parts[1]);
+      if (IS_WINDOWS) {
+        try {
+          for (String line : execute(javaBasedSystemEncoding, "cmd", "/C", "chcp")) {
+            String[] parts = line.split(":\\s*");
+            if (parts.length == 2 && parts[1].matches("\\d+") && Charset.isSupported(parts[1])) {
+              return Charset.forName(parts[1]);
+            }
           }
+          LOGGER.info("Unable to determine the shell encoding from 'chcp'; using {}", javaBasedSystemEncoding);
+        } catch (Exception e) {
+          LOGGER.info("Unable to determine the shell encoding from 'chcp'; using {}", javaBasedSystemEncoding, e);
         }
-      } catch (Exception e) {
-        LOGGER.info("Unable to determine the shell encoding from 'chcp'; using {}", javaBasedSystemEncoding, e);
       }
 
       return javaBasedSystemEncoding;     // Use the locale-based encoding
+    }
+
+    /**
+     * Gets the {@code Charset} used by the JDK to interpret host command output.
+     * This value may not be the correct value with which to interpret Windows command shell
+     * output.
+     * @return the host command encoding {@code Charset}
+     */
+    private static Charset getJavaBasedSystemEncoding() {
+      for (String property : Arrays.asList("sun.stdout.encoding", "sun.jnu.encoding")) {
+        String encoding = System.getProperty(property);
+        if (encoding != null && Charset.isSupported(encoding)) {
+          return Charset.forName(encoding);
+        }
+      }
+      return Charset.defaultCharset();
     }
   }
 }

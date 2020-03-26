@@ -19,15 +19,10 @@ import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.terracotta.utilities.exec.Shell;
 
 import java.io.FilePermission;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.RandomAccessFile;
-import java.nio.channels.FileChannel;
-import java.nio.channels.FileLock;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.CopyOption;
@@ -58,10 +53,8 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -71,23 +64,18 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.Phaser;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import static java.nio.file.Files.isDirectory;
 import static java.nio.file.Files.isSameFile;
 import static java.nio.file.Files.isSymbolicLink;
 import static java.nio.file.LinkOption.NOFOLLOW_LINKS;
 import static java.nio.file.StandardCopyOption.COPY_ATTRIBUTES;
-import static java.util.Objects.requireNonNull;
 
 /**
  * Provides <i>sane</i> file management operations.
@@ -135,7 +123,6 @@ import static java.util.Objects.requireNonNull;
  */
 public final class Files {
   private static Logger LOGGER = LoggerFactory.getLogger(Files.class);
-  private static final boolean IS_WINDOWS = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("win");
 
   private static final Duration OPERATION_REPEAT_DELAY = Duration.ofMillis(100);
   private static final int OPERATION_ATTEMPTS = 10;
@@ -150,36 +137,8 @@ public final class Files {
   /**
    * Identifies the {@link FileSystemException#getReason()} messages for which file operations that
    * warrant a retry.
-   * For example, a likely cause for an AccessDeniedException from a {@link java.nio.file.Files#move},
-   * under Windows anyway, is that some other system process, like indexing or anti-virus, has the file
-   * momentarily open.  A retry of a rename (or delete) is appropriate.  Failures reflected by other
-   * {@link FileSystemException} instances can also warrant retry.
-   * <p>
-   * Ideally, the JDK would reflect such "errors of interference" as specific exceptions
-   * that can be easily determined and a retry attempted.
-   * Unfortunately, the JDK can manifest this interference in many ways:
-   *  1) AccessDeniedException reflects a Windows errorCode of 0x05 (ERROR_ACCESS_DENIED) or
-   *      Unix error code of EACCES.  This error could be persistent or temporary.
-   *  2) FileSystemException with a _reason_ reflecting an error code like:
-   *      * Windows ERROR_SHARING_VIOLATION (0x20)
-   *      * Windows ERROR_LOCK_VIOLATION (0x21)
-   *      * Unix EAGAIN
-   * Compounding the programmatic handling of these errors, a FileSystemException does not include
-   * the errorCode -- the reason text is obtained from the Windows 'FormatMessageW' function
-   * specifying 0x0 as the 'dwLanguageId' parameter or the Unix 'strerror' function.  This means that
-   * the reason text is, potentially, in the local language and not suitable for reliable parsing.
    */
-  private static final Set<String> RETRY_REASONS;
-  static {
-    Set<String> reasons = new LinkedHashSet<>();
-    for (String reason : calculateReasons()) {
-      if (reason != null) {
-        reasons.add(reason);
-      }
-    }
-    RETRY_REASONS = Collections.unmodifiableSet(reasons);
-    LOGGER.trace("Retry reason = {}", RETRY_REASONS);
-  }
+  private static final Set<String> RETRY_REASONS = FilesSupport.getRetryReasons();
 
   /**
    * The {@code dos:attributes} value indicating the file object is a directory.
@@ -234,6 +193,10 @@ public final class Files {
    * indicating interference from temporary access by other processes.
    * <p>
    * This method uses the default time limit for the renaming operation.
+   * <p>
+   * A {@link Thread#interrupt()} call does not interrupt the rename operation -- the rename
+   * process continues until it completes (successfully or with a failure) at which point the
+   * interrupt is re-asserted before control is returned to the caller.
    *
    * @param origin the path of the file/directory to rename
    * @param target the new name for the file/directory; a relative path is resolved as a sibling
@@ -255,6 +218,10 @@ public final class Files {
   /**
    * Rename the file or directory with retry for {@code FileSystemException} instances
    * indicating interference from temporary access by other processes.
+   * <p>
+   * A {@link Thread#interrupt()} call does not interrupt the rename operation -- the rename
+   * process continues until it completes (successfully or with a failure) at which point the
+   * interrupt is re-asserted before control is returned to the caller.
    *
    * @param origin the path of the file/directory to rename
    * @param target the new name for the file/directory; a relative path is resolved as a sibling
@@ -295,6 +262,10 @@ public final class Files {
    * completion of this method, the path is immediately available for re-creation.
    * <p>
    * This method uses the default time limit for the renaming operation.
+   * <p>
+   * A {@link Thread#interrupt()} call does not interrupt the delete operation -- the rename/delete
+   * process continues until it completes (successfully or with a failure) at which point the
+   * interrupt is re-asserted before control is returned to the caller.
    *
    * @param path the file/directory path to delete
    *
@@ -320,6 +291,10 @@ public final class Files {
    * The rename is performed in a manner accommodating temporary access by other processes (indexing,
    * anti-virus) and, after renaming, the file is deleted.  Because the file was first renamed, at
    * completion of this method, the path is immediately available for re-creation.
+   * <p>
+   * A {@link Thread#interrupt()} call does not interrupt the delete operation -- the rename/delete
+   * process continues until it completes (successfully or with a failure) at which point the
+   * interrupt is re-asserted before control is returned to the caller.
    *
    * @param path the file/directory path to delete
    * @param renameTimeLimit the time limit to apply to renaming the file/directory before deletion
@@ -360,6 +335,10 @@ public final class Files {
    * When deleting a directory, the directory must be empty.
    * <p>
    * This method uses the default time limit for the renaming operation.
+   * <p>
+   * A {@link Thread#interrupt()} call does not interrupt the delete operation -- the rename/delete
+   * process continues until it completes (successfully or with a failure) at which point the
+   * interrupt is re-asserted before control is returned to the caller.
    *
    * @param path the path of the file to delete
    *
@@ -384,6 +363,10 @@ public final class Files {
    * completion of this method, the path is immediately available for re-creation.
    * <p>
    * When deleting a directory, the directory must be empty.
+   * <p>
+   * A {@link Thread#interrupt()} call does not interrupt the delete operation -- the rename/delete
+   * process continues until it completes (successfully or with a failure) at which point the
+   * interrupt is re-asserted before control is returned to the caller.
    *
    * @param path the path of the file to delete
    * @param renameTimeLimit the time limit to apply to renaming the file/directory before deletion
@@ -440,6 +423,10 @@ public final class Files {
    * Deletes the file system path specified if it exists.  This method calls
    * {@link #delete(Path)} and handles the {@link NoSuchFileException} thrown if the
    * file does not exist.
+   * <p>
+   * A {@link Thread#interrupt()} call does not interrupt the delete operation -- the rename/delete
+   * process continues until it completes (successfully or with a failure) at which point the
+   * interrupt is re-asserted before control is returned to the caller.
    * @param path the path of the file to delete
    * @return {@code true} if the file was deleted as the result of this call; {@code false} otherwise
    * @throws IOException if deletion failed
@@ -698,6 +685,10 @@ public final class Files {
    *   <li>{@link StandardCopyOption#COPY_ATTRIBUTES COPY_ATTRIBUTES}</li>
    *   <li>{@link ExtendedOption#RECURSIVE RECURSIVE}</li>
    * </ul>
+   * <p>
+   * A {@link Thread#interrupt()} call does not interrupt the relocation operation -- the relocation
+   * process continues until it completes (successfully or with a failure) at which point the
+   * interrupt is re-asserted before control is returned to the caller.
    *
    * @param source the file/directory from which the copy is made
    * @param target the file/directory to which the copy is made; must not exist unless
@@ -742,6 +733,10 @@ public final class Files {
   /**
    * Delete the file or directory tree using a rename/delete scheme with retry for
    * {@code FileSystemException} instances indicating interference from temporary access by other processes.
+   * <p>
+   * A {@link Thread#interrupt()} call does not interrupt the delete operation -- the rename/delete
+   * process continues until it completes (successfully or with a failure) at which point the
+   * interrupt is re-asserted before control is returned to the caller.
    *
    * @param path the file or root of the directory to delete
    * @param retryDirNotEmpty enable retry for {@link DirectoryNotEmptyException}
@@ -839,6 +834,11 @@ public final class Files {
    * Attempts to delete the specified path.  If {@link java.nio.file.Files#delete(Path) Files.delete}
    * throws a select {@link FileSystemException} or {@link DirectoryNotEmptyException}, the delete is
    * retried up to the {@code attempts} limit. If {@code path} does not exist, this method does not throw.
+   * <p>
+   * An interrupt received during the retry delay interrupts the delay but is otherwise not acted
+   * upon until the delete is complete or the retry attempts are exhausted.  Once the delete activity
+   * is complete, the interrupt is re-instated and control returned to the caller either via return
+   * or by re-throwing the exception causing the delete to fail.
    *
    * @param path the path to delete
    * @param retryDirNotEmpty enable retry for {@link DirectoryNotEmptyException}
@@ -862,52 +862,61 @@ public final class Files {
       LOGGER.debug("[retryingDelete] Deleting \"{}\"", path);
     }
 
-    IOException last = null;
-    int tries;
-    for (tries = 0; tries < attempts; tries++) {
-      try {
-        // We're deleting -- if the file/directory is already deleted, we don't care
-        java.nio.file.Files.deleteIfExists(path);
-        return;
-      } catch (DirectoryNotEmptyException e) {
-        last = e;
-        if (retryDirNotEmpty) {
-          try {
-            TimeUnit.NANOSECONDS.sleep(retryDelay.toNanos());
-          } catch (InterruptedException ex) {
-            last.addSuppressed(ex);
+    boolean interrupted = Thread.interrupted();
+    try {
+      IOException last = null;
+      int tries;
+      for (tries = 0; tries < attempts; tries++) {
+        try {
+          // We're deleting -- if the file/directory is already deleted, we don't care
+          java.nio.file.Files.deleteIfExists(path);
+          return;
+        } catch (DirectoryNotEmptyException e) {
+          last = e;
+          if (retryDirNotEmpty) {
+            try {
+              TimeUnit.NANOSECONDS.sleep(retryDelay.toNanos());
+            } catch (InterruptedException ex) {
+              // Remember the interrupt and continue trying to delete
+              interrupted = true;
+            }
+          } else {
             break;
           }
-        } else {
-          break;
-        }
-      } catch (FileSystemException e) {
-        /*
-         * Retry the retryable FileSystemExceptions.
-         */
-        last = e;
-        if ((e instanceof AccessDeniedException) || RETRY_REASONS.contains(e.getReason())) {
-          try {
-            TimeUnit.NANOSECONDS.sleep(retryDelay.toNanos());
-          } catch (InterruptedException ex) {
-            last.addSuppressed(ex);
-            break;
-          }
-        } else {
+        } catch (FileSystemException e) {
           /*
-           * A FileSystemException for which retry is not enabled...
+           * Retry the retryable FileSystemExceptions.
            */
+          last = e;
+          if ((e instanceof AccessDeniedException) || RETRY_REASONS.contains(e.getReason())) {
+            try {
+              TimeUnit.NANOSECONDS.sleep(retryDelay.toNanos());
+            } catch (InterruptedException ex) {
+              // Remember the interrupt and continue trying to delete
+              interrupted = true;
+            }
+          } else {
+            /*
+             * A FileSystemException for which retry is not enabled...
+             */
+            break;
+          }
+        } catch (IOException e) {
+          last = e;
           break;
         }
-      } catch (IOException e) {
-        last = e;
-        break;
+      }
+
+      if (LOGGER.isDebugEnabled()) {
+        LOGGER.debug("Delete for \"{}\" failed; tries={}", path, tries, last);
+      }
+      throw last;
+
+    } finally {
+      if (interrupted) {
+        Thread.currentThread().interrupt();
       }
     }
-    if (LOGGER.isDebugEnabled()) {
-      LOGGER.debug("Delete for \"{}\" failed; tries={}", path, tries, last);
-    }
-    throw last;
   }
 
   /**
@@ -942,6 +951,10 @@ public final class Files {
    * Attempts to rename the specified path to a new path.  If
    * {@link java.nio.file.Files#move(Path, Path, CopyOption...)}  Files.move} throws a select
    * {@link FileSystemException}, the rename is retried up to the {@code attempts} limit.
+   * <p>
+   * A {@link Thread#interrupt()} call does not interrupt the rename operation -- the rename
+   * process continues until it completes (successfully or with a failure) at which point the
+   * interrupt is re-asserted before control is returned to the caller.
    *
    * @param originalPath the file/directory path to rename
    * @param renamePathSupplier the {@code Supplier} from which the new path is obtained
@@ -965,58 +978,66 @@ public final class Files {
       throw new IllegalArgumentException("renameTimeLimit must be greater than " + MINIMUM_TIME_LIMIT);
     }
 
-    IOException last;
-    Path renamePath;
-    boolean unexpected = false;
-    long startTime = System.nanoTime();
-    long deadline = startTime + renameTimeLimit.toNanos();
-    do {
-      renamePath = renamePathSupplier.get();
-      if (LOGGER.isDebugEnabled()) {
-        LOGGER.debug("Renaming \"{}\" to \"{}\"", originalPath, renamePath);
-      }
-      try {
-        java.nio.file.Files.move(originalPath, renamePath, StandardCopyOption.ATOMIC_MOVE);
-        return renamePath;
-      } catch (AtomicMoveNotSupportedException e) {
-        // Unrecoverable -- indicates a copy/delete is needed.
-        throw e;
-      } catch (FileSystemException e) {
-        /*
-         * Retry the retryable FileSystemExceptions.
-         */
-        last = e;
-        if ((e instanceof AccessDeniedException) || RETRY_REASONS.contains(e.getReason())) {
-          try {
-            TimeUnit.NANOSECONDS.sleep(OPERATION_REPEAT_DELAY.toNanos());
-          } catch (InterruptedException ex) {
-            last.addSuppressed(ex);
+    boolean interrupted = Thread.interrupted();
+    try {
+      IOException last;
+      Path renamePath;
+      boolean unexpected = false;
+      long startTime = System.nanoTime();
+      long deadline = startTime + renameTimeLimit.toNanos();
+      do {
+        renamePath = renamePathSupplier.get();
+        if (LOGGER.isDebugEnabled()) {
+          LOGGER.debug("Renaming \"{}\" to \"{}\"", originalPath, renamePath);
+        }
+        try {
+          java.nio.file.Files.move(originalPath, renamePath, StandardCopyOption.ATOMIC_MOVE);
+          return renamePath;
+        } catch (AtomicMoveNotSupportedException e) {
+          // Unrecoverable -- indicates a copy/delete is needed.
+          throw e;
+        } catch (FileSystemException e) {
+          /*
+           * Retry the retryable FileSystemExceptions.
+           */
+          last = e;
+          if ((e instanceof AccessDeniedException) || RETRY_REASONS.contains(e.getReason())) {
+            try {
+              TimeUnit.NANOSECONDS.sleep(OPERATION_REPEAT_DELAY.toNanos());
+            } catch (InterruptedException ex) {
+              // Remember the interrupt and continue trying to rename
+              interrupted = true;
+            }
+            if (LOGGER.isTraceEnabled()) {
+              LOGGER.trace("Retrying rename of \"{}\"; elapsedTime={}, interrupted={}",
+                  originalPath, Duration.ofNanos(System.nanoTime() - startTime), interrupted);
+            }
+          } else {
+            /*
+             * A FileSystemException for which retry is not enabled...
+             */
+            unexpected = true;
             break;
           }
-          if (LOGGER.isTraceEnabled()) {
-            LOGGER.trace("Retrying rename of \"{}\"; elapsedTime={}",
-                originalPath, Duration.ofNanos(System.nanoTime() - startTime));
-          }
-        } else {
-          /*
-           * A FileSystemException for which retry is not enabled...
-           */
+        } catch (IOException e) {
+          last = e;
           unexpected = true;
           break;
         }
-      } catch (IOException e) {
-        last = e;
-        unexpected = true;
-        break;
-      }
-    } while (deadline - System.nanoTime() >= 0);
+      } while (deadline - System.nanoTime() >= 0);
 
-    /*
-     * At this point, the number of rename attempts has been exhausted.
-     */
-    LOGGER.warn("{} IOException renaming \"{}\" to \"{}\"; elapsedTime={}",
-        (unexpected ? "Unexpected" : "Persistent"), originalPath, renamePath, Duration.ofNanos(System.nanoTime() - startTime), last);
-    throw last;
+      /*
+       * At this point, the number of rename attempts has been exhausted.
+       */
+      LOGGER.warn("{} IOException renaming \"{}\" to \"{}\"; elapsedTime={}",
+          (unexpected ? "Unexpected" : "Persistent"), originalPath, renamePath, Duration.ofNanos(System.nanoTime() - startTime), last);
+      throw last;
+
+    } finally {
+      if (interrupted) {
+        Thread.currentThread().interrupt();
+      }
+    }
   }
 
   private static CopyOption[] effectiveCopyOptions(Set<CopyOption> copyOptions) {
@@ -1027,7 +1048,7 @@ public final class Files {
   }
 
   private static String format(BasicFileAttributes attributes) {
-    return pathType(attributes).toString();
+    return FilesSupport.pathType(attributes).toString();
   }
 
   private static final SecureRandom random = new SecureRandom();
@@ -1060,36 +1081,49 @@ public final class Files {
       boolean retry = true;
       try {
         task.call();
-        retry = false;
+        LOGGER.debug("Deletion complete for \"{}\"", deletionPath);
+        set(null);
+        return;
+
       } catch (DirectoryNotEmptyException e) {
         if (retryDirNotEmpty) {
           LOGGER.warn("Failed to delete \"{}\" - retrying", deletionPath, e);
         } else {
           LOGGER.warn("Background deletion of \"{}\" failed - manual cleanup needed", deletionPath, e);
+          setException(e);
           retry = false;
         }
       } catch (FileSystemException e) {
         if ((e instanceof AccessDeniedException) || RETRY_REASONS.contains(e.getReason())) {
           LOGGER.warn("Failed to delete \"{}\" - retrying", deletionPath, e);
         } else {
+          setException(e);
           retry = false;
         }
-
       } catch (Exception e) {
         LOGGER.warn("Background deletion of \"{}\" failed - manual cleanup needed", deletionPath, e);
+        setException(e);
         retry = false;
       }
 
+      if (isCancelled()) {
+        LOGGER.warn("Background deletion for \"{}\" canceled - manual cleanup needed", deletionPath);
+        set(null);
+        retry = false;
+      }
+
+      /*
+       * If the delete did not complete for a retryable reason, schedule the deletion to
+       * run in the background and return to the caller.
+       */
       if (retry) {
         try {
           executor.execute(this);
           LOGGER.info("Submitted background deletion task for \"{}\"", deletionPath);
         } catch (RejectedExecutionException e) {
+          setException(e);
           LOGGER.warn("Background deletion for \"{}\" failed - manual cleanup needed", deletionPath, e);
         }
-      } else {
-        LOGGER.debug("Deletion complete for \"{}\"", deletionPath);
-        set(null);
       }
     }
   }
@@ -1445,307 +1479,7 @@ public final class Files {
     return fileStore;
   }
   private static final ThreadLocal<Map<Path, FileStore>> FILE_STORE_CACHE = ThreadLocal.withInitial(WeakHashMap::new);
-
-  /**
-   * If a Windows platform, gets the current SUBST assignments, if any.  Because the SUBST
-   * list can change without notice, this assignment map is not cached.  A failure in obtaining
-   * the assignment list results in the return of an empty map.
-   * @return the current SUBST assignments
-   */
-  private static Map<Path, Path> getSubsts() {
-    if (!IS_WINDOWS) {
-      return Collections.emptyMap();
-    }
-
-    try {
-      Map<Path, Path> substs = new LinkedHashMap<>();
-      for (String subst : Shell.execute(Shell.Encoding.CHARSET, "subst")) {
-        Matcher matcher = SUBST_PAIR.matcher(subst);
-        if (matcher.matches()) {
-          Path drive = Paths.get(matcher.group(1));
-          String mappedPathName = matcher.group(2);
-          Path mappedPath;
-          try {
-            mappedPath = Paths.get(mappedPathName);
-          } catch (InvalidPathException e) {
-            // Non-mappable characters are presented as '?' -- a character illegal in a Windows file path
-            LOGGER.warn("Cannot determine mapping for drive {}: \"{}\" contains character not mapped in charset {}",
-                drive, mappedPathName, Shell.Encoding.CHARSET, e);
-            continue;
-          }
-          if (!java.nio.file.Files.exists(mappedPath)) {
-            LOGGER.warn("Cannot determine mapping for drive {}: \"{}\" does not exist", drive, mappedPathName);
-            continue;
-          }
-          substs.put(drive, mappedPath);
-        }
-      }
-      return Collections.unmodifiableMap(substs);
-
-    } catch (Exception e) {
-      LOGGER.info("Failed to determine drive substitutions", e);
-      return Collections.emptyMap();
-    }
-  }
-  private static final Pattern SUBST_PAIR = Pattern.compile("(.*): => (.*)");
-  private static final ThreadLocal<Map<Path, Path>> DRIVE_SUBSTITUTIONS = ThreadLocal.withInitial(Files::getSubsts);
-
-  /**
-   * Dynamically determine reasons for file operation retry.
-   * @return a {@code Set} of {@link FileSystemException#getReason()} values warranting retry
-   */
-  private static Set<String> calculateReasons() {
-    /*
-     * First, set up a directory tree to use for test file operations.
-     *
-     *                           top
-     *                          /
-     *                         dir
-     *                        /   \
-     *                     file1  file2
-     */
-    Path file2;
-    Path file1;
-    Path dir;
-    Path top;
-    try {
-      top = java.nio.file.Files.createTempDirectory("top");
-      top.toFile().deleteOnExit();
-
-      dir = java.nio.file.Files.createDirectory(top.resolve("dir"));
-      dir.toFile().deleteOnExit();
-
-      file1 = java.nio.file.Files.createFile(dir.resolve("file1"));
-      file1.toFile().deleteOnExit();
-      java.nio.file.Files.write(file1, Collections.singleton("file1"), StandardCharsets.UTF_8);
-
-      file2 = java.nio.file.Files.createFile(dir.resolve("file2"));
-      file2.toFile().deleteOnExit();
-      java.nio.file.Files.write(file1, Collections.singleton("file2"), StandardCharsets.UTF_8);
-    } catch (IOException e) {
-      LOGGER.trace("Unexpected I/O error constructing failure reasons", e);
-      return Collections.emptySet();
-    }
-
-    Set<String> reasons = new LinkedHashSet<>();
-
-    /*
-     * File is open for read versus move/rename.
-     */
-    try (PathHolder holder = new PathHolder(file1, false)) {
-      holder.start();
-      file1 = java.nio.file.Files.move(file1, file1.resolveSibling("renamed"), StandardCopyOption.ATOMIC_MOVE);
-    } catch (FileSystemException e) {
-      reasons.add(e.getReason());
-      LOGGER.trace("Observed for file/file OPEN rename {} '{}'", e.getClass().getSimpleName(), e.getReason());
-    } catch (Exception e) {
-      // Nothing we can do about this ...
-      LOGGER.trace("Unexpected IOException renaming {}", file1, e);
-    }
-
-    /*
-     * File is open for read versus directory move/rename.
-     */
-    try (PathHolder holder = new PathHolder(file1, false)) {
-      holder.start();
-      dir = java.nio.file.Files.move(dir, dir.resolveSibling("renamed"), StandardCopyOption.ATOMIC_MOVE);
-    } catch (FileSystemException e) {
-      reasons.add(e.getReason());
-      LOGGER.trace("Observed for file/dir OPEN rename {} '{}'", e.getClass().getSimpleName(), e.getReason());
-    } catch (Exception e) {
-      // Nothing we can do about this ...
-      LOGGER.trace("Unexpected IOException renaming {}", file1, e);
-    }
-
-    /*
-     * File locked versus move/rename.
-     */
-    try (PathHolder holder = new PathHolder(file1, true)) {
-      holder.start();
-      file1 = java.nio.file.Files.move(file1, file1.resolveSibling("renamed"), StandardCopyOption.ATOMIC_MOVE);
-    } catch (FileSystemException e) {
-      reasons.add(e.getReason());
-      LOGGER.trace("Observed for file/file LOCKED rename {} '{}'", e.getClass().getSimpleName(), e.getReason());
-    } catch (Exception e) {
-      // Nothing we can do about this ...
-      LOGGER.trace("Unexpected IOException renaming {}", file1, e);
-    }
-
-    /*
-     * File locked versus directory move/rename.
-     */
-    try (PathHolder holder = new PathHolder(file1, true)) {
-      holder.start();
-      dir = java.nio.file.Files.move(dir, dir.resolveSibling("renamed"), StandardCopyOption.ATOMIC_MOVE);
-    } catch (FileSystemException e) {
-      reasons.add(e.getReason());
-      LOGGER.trace("Observed for file/dir LOCKED rename {} '{}'", e.getClass().getSimpleName(), e.getReason());
-    } catch (Exception e) {
-      // Nothing we can do about this ...
-      LOGGER.trace("Unexpected IOException renaming {}", file1, e);
-    }
-
-    /*
-     * Directory is open for read versus file move/rename.
-     */
-    try (PathHolder holder = new PathHolder(dir, false)) {
-      holder.start();
-      file1 = java.nio.file.Files.move(file1, file1.resolveSibling("renamed"), StandardCopyOption.ATOMIC_MOVE);
-      LOGGER.trace("Succeeded dir/file rename");
-    } catch (FileSystemException e) {
-      reasons.add(e.getReason());
-      LOGGER.trace("Observed for dir/file rename {} '{}'", e.getClass().getSimpleName(), e.getReason());
-    } catch (IOException e) {
-      // Nothing we can do about this ...
-      LOGGER.trace("Unexpected IOException renaming {}", file1, e);
-    }
-
-    for (Path path : Arrays.asList(file2, file1, dir, top)) {
-      try {
-        java.nio.file.Files.deleteIfExists(path);
-      } catch (IOException e) {
-        // Ignore ... will delete at shutdown if possible
-        LOGGER.trace("Cannot delete {}", path, e);
-      }
-    }
-
-    return reasons;
-  }
-
-  /**
-   * Determine the path type from {@link BasicFileAttributes}.
-   * @param attributes the {@code BasicFileAttributes} to interpret
-   * @return the list of path types; empty if the type cannot be determined
-   */
-  private static List<String> pathType(BasicFileAttributes attributes) {
-    List<String> attrs = new ArrayList<>();
-    if (attributes.isDirectory()) attrs.add("dir");
-    if (attributes.isRegularFile()) attrs.add("file");
-    if (attributes.isSymbolicLink()) attrs.add("link");
-    if (attributes.isOther()) attrs.add("other");
-    return attrs;
-  }
-
-  /**
-   * Support class to open or lock a file for file operation impact assessment.
-   * <p>
-   * Although this class has "support" for opening a directory, there appears to be no reliable
-   * means in Java of opening a directory and observing the impact on other file operations.
-   */
-  private static class PathHolder implements AutoCloseable {
-    // Needs a local LOGGER to prevent issues with initialization of Files class.
-    private static final Logger LOGGER = LoggerFactory.getLogger(Files.class);
-    private final Thread thread;
-    private final Phaser barrier = new Phaser(2);
-
-    private AtomicBoolean started = new AtomicBoolean(false);
-
-    public PathHolder(Path path, boolean lock) throws IOException {
-      requireNonNull(path, "path");
-
-      BasicFileAttributes attr = java.nio.file.Files.readAttributes(path, BasicFileAttributes.class, NOFOLLOW_LINKS);
-      Runnable holder;
-      if (attr.isRegularFile()) {
-        if (lock) {
-          holder = () -> lockFile(path);
-        } else {
-          holder = () -> holdFile(path);
-        }
-      } else if (attr.isDirectory()) {
-        holder = () -> holdDirectory(path);
-      } else {
-        throw new AssertionError("Cannot handle path of type " + pathType(attr) + " - " + path);
-      }
-
-      this.thread = new Thread(holder, "Files$PathHolder - " + path);
-    }
-
-    /**
-     * Holds open a file for read.
-     * @param file the file path to hold open
-     */
-    private void holdFile(Path file) {
-      LOGGER.trace("Hold on \"{}\" beginning", file);
-      try (RandomAccessFile randomAccessFile = new RandomAccessFile(file.toFile(), "r")) {
-        randomAccessFile.read();
-        barrier.arriveAndAwaitAdvance();
-        // Hold path open so others can observe the state
-        barrier.arriveAndAwaitAdvance();
-      } catch (Exception e) {
-        LOGGER.warn("Error attempting to hold \"{}\"", file, e);
-      } finally {
-        barrier.arriveAndDeregister();
-      }
-      LOGGER.trace("Hold ended on \"{}\"", file);
-    }
-
-    /**
-     * Holds a lock on a file.
-     * @param file the file path to lock
-     */
-    @SuppressWarnings("try")
-    private void lockFile(Path file) {
-      LOGGER.trace("Lock on \"{}\" beginning", file);
-      try (RandomAccessFile randomAccessFile = new RandomAccessFile(file.toFile(), "rw")) {
-        FileChannel channel = randomAccessFile.getChannel();
-        try (FileLock ignored = channel.lock()) {
-          barrier.arriveAndAwaitAdvance();
-          // Hold path open so others can observe the state
-          barrier.arriveAndAwaitAdvance();
-        }
-      } catch (Exception e) {
-        LOGGER.warn("Error attempting to lock \"{}\"", file, e);
-      } finally {
-        barrier.arriveAndDeregister();
-      }
-      LOGGER.trace("Lock ended on \"{}\"", file);
-    }
-
-    @SuppressFBWarnings("DLS_DEAD_LOCAL_STORE")
-    private void holdDirectory(Path dir) {
-      LOGGER.trace("Hold on \"{}\" beginning", dir);
-      try (DirectoryStream<Path> directoryStream = java.nio.file.Files.newDirectoryStream(dir)) {
-        for (Path ignored : directoryStream) {
-          barrier.arriveAndAwaitAdvance();
-          // Hold path open so others can observe the state
-          barrier.arriveAndAwaitAdvance();
-          break;
-        }
-      } catch (Exception e) {
-        LOGGER.warn("Error attempting to hold \"{}\"", dir, e);
-      } finally {
-        barrier.arriveAndDeregister();
-      }
-      LOGGER.trace("Hold ended on \"{}\"", dir);
-    }
-
-    /**
-     * Open or lock the file and return. The file remains opened or locked until
-     * {@link #close()} is called.
-     */
-    public void start() {
-      thread.setDaemon(true);
-      thread.start();
-      started.set(true);
-      barrier.arriveAndAwaitAdvance();
-      // path is now 'open' ...
-    }
-
-    /**
-     * Closes and unlocks the file.
-     */
-    @Override
-    public void close() {
-      if (started.compareAndSet(true, false)) {
-        barrier.arriveAndDeregister();
-        try {
-          thread.join();
-        } catch (InterruptedException e) {
-          // Ignored
-        }
-      }
-    }
-  }
+  private static final ThreadLocal<Map<Path, Path>> DRIVE_SUBSTITUTIONS = ThreadLocal.withInitial(FilesSupport::getSubsts);
 
   /**
    * Thrown to indicate that a file copy was attempted outside of the

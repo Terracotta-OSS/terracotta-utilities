@@ -80,6 +80,159 @@ import static org.terracotta.utilities.exec.Shell.execute;
  * Provides the foundation for testing {@link Files}.
  * <p>
  * This class is not designed for parallel execution of its subclasses.
+ *
+ * <h3>Testing Considerations</h3>
+ *
+ * For thorough testing, the following directory structures are needed:
+ * <pre>{@code
+ * [ditaa]
+ * ----
+ *
+ * +----------------------------------------------------------------------------------------------------+
+ * |                                                                                                    |
+ * |{s}c0AF  Primary FileStore                                                                          |
+ * |                                                /------\                                            |
+ * |                                                |{o}   |                                            |
+ * |                               /----------------| top  |------------\                               |
+ * |                               |                |      |            |                               |
+ * |                               |                \------/            |                               |
+ * |                               |                    |               |                               |
+ * |                               |                    |               |                               |
+ * |                               V                    V               V                               |
+ * |                           /------\             +------+         /------\                           |
+ * |                           |{o}   |             | top  |         |{o}   |                           |
+ * |                 /---------|  a   |-------\     | File |       /-|  b   |--\                        |
+ * |                 |         |      |       |     |      |       | |      |  |                        |
+ * |                 |         \------/       |     +------+       | \------/  |                        |
+ * |                 |            |           |                    |           |                        |
+ * |                 |            |           |                    |           |                        |
+ * |                 V            V           V                    V           V                        |
+ * |             /------\      +-------+   +------+            /------\     +------+                    |
+ * |             |{o}   |      | {c}   |   | {c}  |            |{o}   |     | {c}  |                    |
+ * |      /------|  c   |--\   |missing|   |  d   |=---------->|  e   |     | file |=-----------------\ |
+ * |      |      |      |  |   | Link  |   |      |         /--|      |--\  | Link |                  | |
+ * |      |      \------/  |   +-------+   +------+         |  \------/  |  +------+                  | |
+ * |      |         |      \---\   |                    /---/      |     \---\                        | |
+ * |      |         |          |   \--=---\             |          |         |                        | |
+ * |      |         |          |          |             |          |         |                        | |
+ * |      |         |          |          V             |          |         |                        | |
+ * |      V         V          V       missing          V          V         V                        | |
+ * |  +------+   +------+   +------+                +------+   /------\   +-------+        /------\   | |
+ * |  | {c}  |   | {c}  |   | {c}  |                |      |   |{o}   |   | {c}   |        |{o}   |   | |
+ * |  |  f   |   |cFile1|   |cFile2|=-------------->| eFile|   |empty |   |dirLink|=------>|common|   | |
+ * |  |      |   |      |   |      |                |      |   | Dir  |   |       |        |      |   | |
+ * |  +------+   +------+   +------+                +------+   \------/   +-------+        \------/   | |
+ * |     :           :                                                                        |       | |
+ * |     |           |                                                                        V       | |
+ * |     |           |                                                                     +------+   | |
+ * |     |           |                                                                     |common|   | |
+ * |     |           |                                                                     | File |<--/ |
+ * |     |           |                                                                     |      |     |
+ * |     |           |                                                                     +------+     |
+ * +----------------------------------------------------------------------------------------------------+
+ *       :           :
+ *       |           |
+ *       |           |                                /----------------------------\
+ *       |           \----------\                     |                            |
+ *       |                      |                     |         LEGEND             |
+ *       |    +-------------+   |                     |                            |
+ *       |    | {s}cRED     |   |                     |  /------\                  |
+ *       |    | Secondary   |   |                     |  |{o}   |                  |
+ *       |    | FileStore   |   |                     |  |      | Directory        |
+ *       |    |   /------\  |   |                     |  |      |                  |
+ *       |    |   |{o}   |  |   |                     |  \------/                  |
+ *       \----|=->| fgn  |  |   |                     |                            |
+ *            |   |      |  |   |                     |  +------+                  |
+ *            |   \------/  |   |                     |  | {c}  |                  |
+ *            |      |      |   |                     |  |      | Symbolic Link    |
+ *            |      |      |   |                     |  |      |                  |
+ *            |      V      |   |                     |  +------+                  |
+ *            |   +------+  |   |                     |                            |
+ *            |   | fgn  |  |   |                     |  +------+                  |
+ *            |   | File |<-|---/                     |  |      |                  |
+ *            |   |      |  |                         |  |      | File             |
+ *            |   +------+  |                         |  |      |                  |
+ *            |             |                         |  +------+                  |
+ *            +-------------+                         \----------------------------/
+ * ----
+ * }</pre>
+ *
+ * <ul>
+ *   <li>{@code top}, {@code common}, and {@code fgn} are disjoint, top-level directories</li>
+ *   <li>{@code top} and {@code common} are in the <i>same</i> {@code FileStore} instance</li>
+ *   <li>{@code top} and {@code fgn} are in <i>different</i> {@code FileStore} instances</li>
+ *   <li>Link {@code fileLink} -&gt; {@code commonFile} is a fully-qualified reference</li>
+ *   <li>Link {@code cFile1} -&gt; {@code fgnFile} is a fully-qualified reference</li>
+ *   <li>Link {@code cFile2} -&gt; {@code eFile} is a relative reference ({@code ../../d/eFile})</li>
+ *   <li>Link {@code d} -&gt; {@code e} is a relative reference ({@code ../../b/e})</li>
+ *   <li>Link {@code f} -&gt; {@code fgn} is a fully-qualified reference</li>
+ *   <li>Link {@code dirLink} -&gt; {@code common} is a fully-qualified reference</li>
+ *   <li>Link {@code missingLink} is <i>dead</i> -- a link to a non-existent object</li>
+ *   <li>{@code emptyDir} is an <i>empty</i> directory</li>
+ * </ul>
+ *
+ * The structure involves two (2) {@code java.nio.file.FileStore} instances.  Reliably identifying two
+ * {@code FileStore} instances to use for testing is a challenge -- assuming they exist at all.  The <i>default</i>
+ * {@code java.nio.file.FileSystem} is the only {@code FileSystem} that can be easily identified and, on
+ * Windows and Linux, is likely to be the only "standard" {@code FileSystem} available.
+ * <p>
+ * On Windows, the {@code FileSystem.getFileStores} method will return multiple {@code FileStore} instances only
+ * if more than one drive is online, e.g. a {@code C} and {@code D} drive are available.  And being able to
+ * write in a directory that's not {@code user.home}, {@code user.dir}, or {@code java.io.tmpdir} is not guaranteed.
+ * <p>
+ * Even if multiple, <i>writable</i> {@code FileStore} instances are available, this structure <b>cannot</b> be
+ * created on Windows <i>unless</i>:
+ *
+ * <ol>
+ *   <li>Tests are run under an administrator account, or</li>
+ *   <li>The <b>Create symbolic links</b> permission has been granted. (See below.)</li>
+ * </ol>
+ *
+ * Under Linux, {@code FileSystem.getFileStores} returns only one {@code FileStore} -- the one for {@code /}.
+ * There is no way, using {@code java.nio.files} classes, to determine the mount points in the Linux
+ * file system -- neither {@code FileSystem.getFileStores} nor {@code FileSystem.getRootDirectories}
+ * identifies mount points.  But, if you refer to a mounted directory and call
+ * {@code Files.getFileStore(Path)}, you get a separate {@code FileStore} instance for that mount.
+ * It is possible, likely even, that {@code java.io.tmpdir} refers to a mount point
+ *
+ * <h4>Symbolic Link Handling</h4>
+ *
+ * For complete testing of the handling of local tree, symbolic link, and {@code FileStore} considerations, the
+ * following links are needed:
+ *
+ * <ul>
+ * <li>Link to a file within the <i>source</i> directory tree  ({@code top/a/c/cFile2} -&gt; {@code ../../d/eFile}).</li>
+ * <li>Link to a file outside the <i>source</i> directory tree but within the <i>source</i> {@code FileStore}
+ *     ({@code top/b/fileLink} -&gt; {@code common/commonFile}).</li>
+ * <li>Link to a file outside the <i>source</i> {@code FileStore}  ({@code top/a/c/cFile1} -&gt; {@code fgn/fgnFile}).</li>
+ * <li>Link to a directory within the <i>source</i> directory tree  ({@code top/a/d} -&gt; {@code ../../b/e}).</li>
+ * <li>Link to a directory outside the <i>source</i> directory tree but within the <i>source</i> {@code FileStore}
+ *     ({@code top/b/e/dirLink} -&gt; {@code common}).</li>
+ * <li>Link to a directory outside the <i>source</i> {@code FileStore}  ({@code top/a/c/f} -&gt; {@code fgn}).</li>
+ * </ul>
+ *
+ * (<i>source</i> in the above list refers to the source {@code Path} provided to the {@code copy} method.)
+ *
+ * <h5>Windows</h5>
+ *
+ * Yes, Virginia, Windows <i>does</i> have symbolic link support!
+ * <p>
+ * By default, <b>administrator privileges</b> are needed to be able to create a symbolic link under Windows.
+ * This permission can be set using the local security policy by granting <b>Create symbolic links</b>
+ * permission to the test user under
+ * <i>Security Settings / Local Policies / User Rights Assignment</i> reached using {@code secpol.msc} using elevated
+ * rights.  (The procedure is described in
+ * <a href="https://stackoverflow.com/a/24353758/1814086">How to create Soft symbolic Link using java.nio.Files</a>.)
+ * Once permitted, a symbolic link can be created using the {@code MKLINK} command or through programmatic
+ * means like {@link java.nio.file.Files#createSymbolicLink}.
+ * <p>
+ * Under Windows, there are different forms of symbolic link for a link to a directory versus a file.
+ * The Java {@code Files.createSymbolicLink} function does the right thing if the link target exists when
+ * the method call is made.  However, if the link target does not exist, {@code createSymbolicLink} always
+ * creates a <i>file</i> symbolic link.  Attempting to access a directory through a file symbolic link
+ * results in an {@code AccessDeniedException} with no further indication of the fault.  To get around this
+ * problem while copying a directory tree, creating a directory link to a no-yet-copied directory
+ * requires temporarily creating the missing directory path.
  */
 public abstract class FilesTestBase {
 
@@ -300,8 +453,6 @@ public abstract class FilesTestBase {
 
   /**
    * Prepares the test source tree.
-   *
-   * @see "common/utilities/src/main/java/com/terracottatech/utilities/Files#copy.adoc"
    */
   @Before
   public void prepareSourceTree() throws IOException {

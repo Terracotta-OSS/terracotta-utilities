@@ -174,8 +174,10 @@ public class FilesDeleteTreeTest extends FilesTestBase {
 
     try (PathHolder holder = new PathHolder(topFile)) {
       holder.start();
+      Thread.currentThread().interrupt();
       deleteTreeWithBackgroundRetry.invoke(null, top, false);
       assertTrue(exists(top));    // File not yet deleted
+      assertTrue(Thread.interrupted());
     }
 
     assertThatEventually(() -> exists(top, LinkOption.NOFOLLOW_LINKS), is(false)).within(Duration.ofSeconds(5L));
