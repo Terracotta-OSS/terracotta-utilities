@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.terracotta.utilities.test;
+package org.terracotta.utilities.test.matchers;
 
 import org.hamcrest.Description;
 import org.hamcrest.Factory;

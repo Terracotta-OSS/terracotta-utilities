@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.terracotta.utilities.test;
+package org.terracotta.utilities.test.matchers;
 
 import org.junit.Test;
 
@@ -23,8 +23,8 @@ import static org.hamcrest.Matchers.allOf;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.junit.Assert.assertThat;
-import static org.terracotta.utilities.test.Matchers.assertThrows;
-import static org.terracotta.utilities.test.ThrowableCauseMatcher.causedBy;
+import static org.terracotta.utilities.test.TerracottaAssert.assertThrows;
+import static org.terracotta.utilities.test.matchers.ThrowableCauseMatcher.causedBy;
 
 /**
  * Basic tests for {@link ThrowableCauseMatcher}.
