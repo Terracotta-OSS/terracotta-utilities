@@ -762,6 +762,14 @@ public abstract class FilesTestBase {
         } catch (NoSuchFileException e) {
           // A broken link can cause a NoSuchFileException
           permissions = Collections.emptySet();
+          if (attrs == null) {
+            BasicFileAttributes basicFileAttributes = readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            if (basicFileAttributes.isSymbolicLink()) {
+              // Broken link ...
+              types.add(FileType.LINK);
+              attrs = basicFileAttributes;
+            }
+          }
         }
         this.permissions = permissions;
       } else {
