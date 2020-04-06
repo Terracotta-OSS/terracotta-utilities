@@ -35,6 +35,7 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
@@ -637,7 +638,7 @@ public class FilesCopyTest extends FilesTestBase {
     java.nio.file.Files.createFile(targetFile);
 
     Path copyPath;
-    try (PathHolder holder = new PathHolder(targetFile, Files.MINIMUM_TIME_LIMIT.dividedBy(2L))) {
+    try (PathHolder holder = new PathHolder(targetFile, Duration.ofMillis(100))) {
       holder.start();
       copyPath = Files.copy(topFile, targetFile, StandardCopyOption.REPLACE_EXISTING);
     }
