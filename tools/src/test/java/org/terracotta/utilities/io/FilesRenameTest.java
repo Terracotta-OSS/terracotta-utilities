@@ -21,10 +21,13 @@ import java.nio.file.FileSystemException;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 
 import static java.nio.file.Files.exists;
 import static java.nio.file.Files.isSameFile;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.greaterThan;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -69,15 +72,17 @@ public class FilesRenameTest extends FilesTestBase {
   @Test
   public void testFileRenameWindows() throws Exception {
     assumeTrue(isWindows);
+    int[] helperCalls = new int[1];
     Path newName = topFile.resolveSibling("newName");
     try (PathHolder holder = new PathHolder(topFile)) {
       holder.start();
-      Files.rename(topFile, newName, Files.MINIMUM_TIME_LIMIT);
+      Files.rename(topFile, newName, Duration.ofMillis(100), () -> helperCalls[0]++);
       fail("Expecting FileSystemException");
     } catch (FileSystemException e) {
       // expected
     }
     assertFalse(exists(newName, LinkOption.NOFOLLOW_LINKS));
+    assertThat(helperCalls[0], greaterThan(0));
 
     Path renamedPath = Files.rename(topFile, newName);
     assertFalse(exists(topFile, LinkOption.NOFOLLOW_LINKS));
@@ -99,10 +104,10 @@ public class FilesRenameTest extends FilesTestBase {
   public void testFileRenameInTime() throws Exception {
     Path newName = topFile.resolveSibling("newName");
     Path renamedPath;
-    try (PathHolder holder = new PathHolder(topFile, Files.MINIMUM_TIME_LIMIT.dividedBy(2L))) {
+    try (PathHolder holder = new PathHolder(topFile, Duration.ofMillis(100))) {
       holder.start();
       Thread.currentThread().interrupt();
-      renamedPath = Files.rename(topFile, newName, Files.MINIMUM_TIME_LIMIT);
+      renamedPath = Files.rename(topFile, newName, holder.getHoldTime());
       assertTrue(Thread.interrupted());
     }
     assertFalse(exists(topFile, LinkOption.NOFOLLOW_LINKS));
@@ -121,7 +126,7 @@ public class FilesRenameTest extends FilesTestBase {
     // A busy link target should not affect link deletion
     try (PathHolder holder = new PathHolder(linkedFile)) {
       holder.start();
-      renamedPath = Files.rename(fileLink, newName, Files.MINIMUM_TIME_LIMIT);
+      renamedPath = Files.rename(fileLink, newName, Duration.ZERO);
     }
     assertFalse(exists(fileLink, LinkOption.NOFOLLOW_LINKS));
     assertTrue(exists(newName, LinkOption.NOFOLLOW_LINKS));
@@ -148,7 +153,7 @@ public class FilesRenameTest extends FilesTestBase {
     List<Path> tree = walkedTree(top);
     try (PathHolder holder = new PathHolder(childFile(top))) {
       holder.start();
-      Files.rename(top, newName, Files.MINIMUM_TIME_LIMIT);
+      Files.rename(top, newName, Duration.ofMillis(100));
       fail("Expecting FileSystemException");
     } catch (FileSystemException e) {
       // expected
@@ -199,7 +204,7 @@ public class FilesRenameTest extends FilesTestBase {
     // A busy link target should not affect link deletion
     try (PathHolder holder = new PathHolder(childFile(dirLink))) {
       holder.start();
-      renamedPath = Files.rename(dirLink, newName, Files.MINIMUM_TIME_LIMIT);
+      renamedPath = Files.rename(dirLink, newName, Duration.ZERO);
     }
     assertFalse(exists(dirLink, LinkOption.NOFOLLOW_LINKS));
     assertTrue(exists(newName, LinkOption.NOFOLLOW_LINKS));

@@ -579,6 +579,10 @@ public abstract class FilesTestBase {
       this.thread = new Thread(holder, "FilesTestBase$PathHolder - " + path);
     }
 
+    public Duration getHoldTime() {
+      return holdTime;
+    }
+
     /**
      * Holds open a file for read.
      * @param file the file path to hold open

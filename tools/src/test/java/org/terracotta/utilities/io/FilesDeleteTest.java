@@ -27,6 +27,8 @@ import java.time.Duration;
 import java.util.List;
 
 import static java.nio.file.Files.exists;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.is;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -78,13 +80,15 @@ public class FilesDeleteTest extends FilesTestBase {
   @Test
   public void testFileDeleteWindows() throws Exception {
     assumeTrue(isWindows);
+    int[] helperCalls = new int[1];
     try (PathHolder holder = new PathHolder(topFile)) {
       holder.start();
-      Files.delete(topFile, Files.MINIMUM_TIME_LIMIT);
+      Files.delete(topFile, Duration.ofMillis(100), () -> helperCalls[0]++);
       fail("Expecting FileSystemException");
     } catch (FileSystemException e) {
       // expected
     }
+    assertThat(helperCalls[0], greaterThan(0));
 
     Files.delete(topFile);
     assertFalse(exists(topFile, LinkOption.NOFOLLOW_LINKS));
@@ -121,9 +125,9 @@ public class FilesDeleteTest extends FilesTestBase {
 
   @Test
   public void testFileDeleteInTime() throws Exception {
-    try (PathHolder holder = new PathHolder(topFile, Files.MINIMUM_TIME_LIMIT.dividedBy(2L))) {
+    try (PathHolder holder = new PathHolder(topFile, Duration.ofMillis(100))) {
       holder.start();
-      Files.delete(topFile, Files.MINIMUM_TIME_LIMIT);
+      Files.delete(topFile, holder.getHoldTime());
     }
     assertFalse(exists(topFile, LinkOption.NOFOLLOW_LINKS));
   }
@@ -137,7 +141,7 @@ public class FilesDeleteTest extends FilesTestBase {
     // A busy link target should not affect link deletion
     try (PathHolder holder = new PathHolder(linkedFile)) {
       holder.start();
-      Files.delete(fileLink, Files.MINIMUM_TIME_LIMIT);
+      Files.delete(fileLink, Duration.ZERO);
     }
     assertFalse(exists(fileLink, LinkOption.NOFOLLOW_LINKS));
     assertTrue(exists(linkedFile, LinkOption.NOFOLLOW_LINKS));   // Assure the linked file still exists
@@ -179,7 +183,7 @@ public class FilesDeleteTest extends FilesTestBase {
     // A busy link target should not affect link deletion
     try (PathHolder holder = new PathHolder(childFile(dirLink))) {
       holder.start();
-      Files.delete(dirLink, Files.MINIMUM_TIME_LIMIT);
+      Files.delete(dirLink, Duration.ZERO);
     }
     assertFalse(exists(dirLink, LinkOption.NOFOLLOW_LINKS));
     tree.forEach(p -> exists(p, LinkOption.NOFOLLOW_LINKS));
@@ -192,17 +196,19 @@ public class FilesDeleteTest extends FilesTestBase {
   public void testBackgroundDelete() throws Exception {
     assumeTrue(isWindows);
     Method deleteTreeWithBackgroundRetry =
-        Files.class.getDeclaredMethod("deleteTreeWithBackgroundRetry", Path.class, boolean.class);
+        Files.class.getDeclaredMethod("deleteTreeWithBackgroundRetry", Path.class, boolean.class, Runnable.class);
     deleteTreeWithBackgroundRetry.setAccessible(true);
 
+    int[] helperCalls = new int[1];
     try (PathHolder holder = new PathHolder(topFile)) {
       holder.start();
       Thread.currentThread().interrupt();
-      deleteTreeWithBackgroundRetry.invoke(null, topFile, false);
+      deleteTreeWithBackgroundRetry.invoke(null, topFile, false, (Runnable) () -> helperCalls[0]++);
       assertTrue(exists(topFile));    // File not yet deleted
       assertTrue(Thread.interrupted());
     }
 
     assertThatEventually(() -> exists(topFile, LinkOption.NOFOLLOW_LINKS), is(false)).within(Duration.ofSeconds(5L));
+    assertThat(helperCalls[0], greaterThan(0));
   }
 }

@@ -52,6 +52,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -69,6 +70,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 import static java.nio.file.Files.isDirectory;
@@ -124,14 +126,17 @@ import static java.nio.file.StandardCopyOption.COPY_ATTRIBUTES;
 public final class Files {
   private static Logger LOGGER = LoggerFactory.getLogger(Files.class);
 
-  private static final Duration OPERATION_REPEAT_DELAY = Duration.ofMillis(100);
-  private static final int OPERATION_ATTEMPTS = 10;
-  private static final Duration DEFAULT_RENAME_TIME_LIMIT = OPERATION_REPEAT_DELAY.multipliedBy(25L);
+  private static final Duration MINIMUM_OPERATION_REPEAT_DELAY = Duration.ofMillis(50);
+  private static final int MAXIMUM_OPERATION_ATTEMPTS = 10;
+  private static final Duration DEFAULT_RENAME_TIME_LIMIT = Duration.ofMillis(2500L);
 
   /**
    * Specifies the minimum value for the delay in {@link #delete(Path, Duration)},
    * {@link #deleteTree(Path, Duration)}, and {@link #rename(Path, Path, Duration)}.
+   *
+   * @deprecated there is now no minimum time limit for operations
    */
+  @Deprecated
   public static final Duration MINIMUM_TIME_LIMIT = DEFAULT_RENAME_TIME_LIMIT.dividedBy(4L);
 
   /**
@@ -240,14 +245,49 @@ public final class Files {
    * @throws SecurityException if permission to access the files/directories involved is not sufficient
    */
   public static Path rename(Path origin, Path target, Duration renameTimeLimit) throws IOException {
+    return rename(origin, target, renameTimeLimit, () -> {});
+  }
+
+  /**
+   * Rename the file or directory with retry for {@code FileSystemException} instances
+   * indicating interference from temporary access by other processes.
+   * <p>
+   * A {@link Thread#interrupt()} call does not interrupt the rename operation -- the rename
+   * process continues until it completes (successfully or with a failure) at which point the
+   * interrupt is re-asserted before control is returned to the caller.
+   * <p>
+   * The {@code progressHelper} will be run between retries of the operation. This can be used
+   * by the caller to perform cleanup that may allow subsequent retry attempts to make progress.
+   * Any exception thrown by the progress helper during the rename will be propagated to the
+   * user and cause the operation to fail.
+   *
+   * @param origin the path of the file/directory to rename
+   * @param target the new name for the file/directory; a relative path is resolved as a sibling
+   *               of {@code origin}
+   * @param renameTimeLimit the time limit to apply to renaming the file/directory before deletion
+   * @param progressHelper a helper task run between retry attempts
+   * @return the path of the target
+   *
+   * @throws AtomicMoveNotSupportedException if {@code target} is an absolute path or relative path not
+   *      on the same device/root as {@code originalPath}; this exception indicates that a copy/delete
+   *      needs to be done in place of a rename
+   * @throws FileSystemException for a retryable exception if the time permitted for rename attempts
+   *          and retryable exception handling is exhausted or interrupted
+   * @throws IllegalArgumentException if {@code renameTimeLimit} is not at least twice the operation repeat delay
+   * @throws IOException if the rename or delete fails
+   * @throws NullPointerException if {@code origin}, {@code target}, or {@code renameTimeLimit} is null
+   * @throws SecurityException if permission to access the files/directories involved is not sufficient
+   */
+  public static Path rename(Path origin, Path target, Duration renameTimeLimit, Runnable progressHelper) throws IOException {
     Objects.requireNonNull(origin, "origin must be non-null");
     Objects.requireNonNull(target, "target must be non-null");
     Objects.requireNonNull(renameTimeLimit, "renameTimeLimit must be non-null");
+    Objects.requireNonNull(progressHelper, "progressHelper must be non-null");
 
     Path realOrigin = origin.toRealPath(NOFOLLOW_LINKS);
     Path resolvedTarget = origin.resolveSibling(target);
 
-    retryingRenamePath(realOrigin, () -> resolvedTarget, renameTimeLimit);
+    retryingRenamePath(realOrigin, () -> resolvedTarget, renameTimeLimit, progressHelper);
     return target;
   }
 
@@ -310,8 +350,50 @@ public final class Files {
    * @see java.nio.file.Files#move(Path, Path, CopyOption...)
    */
   public static void deleteTree(Path path, Duration renameTimeLimit) throws IOException {
+    deleteTree(path, renameTimeLimit, () -> {});
+  }
+
+  /**
+   * Deletes the file system tree beginning at the specified path.  If {@code path} is a file or a
+   * symbolic link, only that file/link is deleted; if {@code path} is a directory, the directory
+   * tree, without following links, is deleted.
+   * <p>
+   * The deletion is accomplished by first renaming the file/directory and then performing the delete.
+   * The rename is performed in a manner accommodating temporary access by other processes (indexing,
+   * anti-virus) and, after renaming, the file is deleted.  Because the file was first renamed, at
+   * completion of this method, the path is immediately available for re-creation.
+   * <p>
+   * A {@link Thread#interrupt()} call does not interrupt the delete operation -- the rename/delete
+   * process continues until it completes (successfully or with a failure) at which point the
+   * interrupt is re-asserted before control is returned to the caller.
+   * <p>
+   * The {@code progressHelper} will be run between retries of the operation. This can be used
+   * by the caller to perform cleanup that may allow subsequent retry attempts to make progress.
+   * Any exception thrown by the progress helper during the rename phase will be propagated to the
+   * user and cause the operation to fail.
+   * <em>
+   * The progress helper (and anything it references or captures) will be strongly-referenced
+   * until the deletion completes - possibly in a background thread long after this method is complete.
+   * </em>
+   *
+   * @param path the file/directory path to delete
+   * @param renameTimeLimit the time limit to apply to renaming the file/directory before deletion
+   * @param progressHelper a helper task run between retry attempts
+   *
+   * @throws IllegalArgumentException if {@code renameTimeLimit} is not at least twice the operation repeat delay
+   * @throws FileSystemException for a retryable exception if the time permitted for rename attempts
+   *          and retryable exception handling is exhausted or interrupted
+   * @throws IOException if the tree deletion fails
+   * @throws NullPointerException if {@code path} or {@code renameTimeLimit} is null
+   * @throws SecurityException if permission to access the file/directory to delete is not sufficient
+   *
+   * @see java.nio.file.Files#delete(Path)
+   * @see java.nio.file.Files#move(Path, Path, CopyOption...)
+   */
+  public static void deleteTree(Path path, Duration renameTimeLimit, Runnable progressHelper) throws IOException {
     Objects.requireNonNull(path, "path must be non-null");
     Objects.requireNonNull(renameTimeLimit, "renameTimeLimit must be non-null");
+    Objects.requireNonNull(progressHelper, "progressHelper must be non-null");
 
     // Get the permission checks out of the way ...
     SecurityManager securityManager = System.getSecurityManager();
@@ -323,7 +405,7 @@ public final class Files {
     /*
      * Delete the file/directory using rename/delete scheme.  The delete fails iff the rename fails.
      */
-    deleteTreeWithRetry(realPath, true, renameTimeLimit);
+    deleteTreeWithRetry(realPath, true, renameTimeLimit, progressHelper);
   }
 
   /**
@@ -383,8 +465,49 @@ public final class Files {
    * @see java.nio.file.Files#move(Path, Path, CopyOption...)
    */
   public static void delete(Path path, Duration renameTimeLimit) throws IOException {
+    delete(path, renameTimeLimit, () -> {});
+  }
+
+  /**
+   * Deletes the file system path specified by first renaming the file then performing the delete.
+   * The rename is performed in a manner to accommodate temporary access by other processes (indexing,
+   * anti-virus) and, after renaming, the file is deleted.  Because the file was first renamed, at
+   * completion of this method, the path is immediately available for re-creation.
+   * <p>
+   * When deleting a directory, the directory must be empty.
+   * <p>
+   * A {@link Thread#interrupt()} call does not interrupt the delete operation -- the rename/delete
+   * process continues until it completes (successfully or with a failure) at which point the
+   * interrupt is re-asserted before control is returned to the caller.
+   * <p>
+   * The {@code progressHelper} will be run between retries of the operation. This can be used
+   * by the caller to perform cleanup that may allow subsequent retry attempts to make progress.
+   * Any exception thrown by the progress helper during the rename phase will be propagated to the
+   * user and cause the operation to fail.
+   * <em>
+   * The progress helper (and anything it references or captures) will be strongly-referenced
+   * until the deletion completes - possibly in a background thread long after this method is complete.
+   * </em>
+   *
+   * @param path the path of the file to delete
+   * @param renameTimeLimit the time limit to apply to renaming the file/directory before deletion
+   * @param progressHelper a helper task run between retry attempts
+   *
+   * @throws DirectoryNotEmptyException if the directory to delete is not empty
+   * @throws FileSystemException for a retryable exception if the time permitted for rename attempts
+   *          and retryable exception handling is exhausted or interrupted
+   * @throws IllegalArgumentException if {@code renameTimeLimit} is not at least twice the operation repeat delay
+   * @throws IOException if deletion failed
+   * @throws NullPointerException if {@code path}, {@code renameTimeLimit} is null
+   * @throws SecurityException if permission to access the file/directory to delete is not sufficient
+   *
+   * @see java.nio.file.Files#delete(Path)
+   * @see java.nio.file.Files#move(Path, Path, CopyOption...)
+   */
+  public static void delete(Path path, Duration renameTimeLimit, Runnable progressHelper) throws IOException {
     Objects.requireNonNull(path, "path must be non-null");
     Objects.requireNonNull(renameTimeLimit, "renameTimeLimit must be non-null");
+    Objects.requireNonNull(progressHelper, "progressHelper must be non-null");
 
     // Get the permission checks out of the way ...
     SecurityManager securityManager = System.getSecurityManager();
@@ -416,7 +539,7 @@ public final class Files {
     /*
      * Delete the file/directory using rename/delete scheme.  The delete fails iff the rename fails.
      */
-    deleteTreeWithRetry(realPath, false, renameTimeLimit);
+    deleteTreeWithRetry(realPath, false, renameTimeLimit, progressHelper);
   }
 
   /**
@@ -737,10 +860,14 @@ public final class Files {
    * A {@link Thread#interrupt()} call does not interrupt the delete operation -- the rename/delete
    * process continues until it completes (successfully or with a failure) at which point the
    * interrupt is re-asserted before control is returned to the caller.
+   * <p>
+   * The {@code progressHelper} will be run between retries of the operation. This can be used
+   * by the caller to perform cleanup that may allow subsequent retry attempts to make progress.
    *
    * @param path the file or root of the directory to delete
    * @param retryDirNotEmpty enable retry for {@link DirectoryNotEmptyException}
    * @param renameTimeLimit the time limit to apply to renaming the file/directory before deletion
+   * @param progressHelper a helper task run between retry attempts
    *
    * @throws FileSystemException for a retryable exception if the time permitted for rename attempts
    *          and retryable exception handling is exhausted or interrupted
@@ -748,7 +875,7 @@ public final class Files {
    * @throws IOException if the rename or delete fails
    * @throws SecurityException if permission to access the file/directory to rename/delete is not sufficient
    */
-  private static void deleteTreeWithRetry(Path path, boolean retryDirNotEmpty, Duration renameTimeLimit)
+  private static void deleteTreeWithRetry(Path path, boolean retryDirNotEmpty, Duration renameTimeLimit, Runnable progressHelper)
       throws IOException {
     if (LOGGER.isDebugEnabled()) {
       LOGGER.debug("[deleteTreeWithRetry] Deleting \"{}\"", path);
@@ -763,14 +890,14 @@ public final class Files {
      * If the rename succeeds, the "delete" is successful and the caller's following operations can
      * proceed,  The remainder of the delete work can be handled in the background if warranted.
      */
-    Path renamedPath = retryingRename(path, () -> randomName("del"), renameTimeLimit);
+    Path renamedPath = retryingRename(path, () -> randomName("del"), renameTimeLimit, progressHelper);
 
     /*
      * Deleting a file or a directory and its contents.  In this, links are not followed -- only
      * direct tree content is removed.
      */
     LOGGER.debug("Deleting \"{}\" renamed from \"{}\"", renamedPath, path);
-    deleteTreeWithBackgroundRetry(renamedPath, retryDirNotEmpty);
+    deleteTreeWithBackgroundRetry(renamedPath, retryDirNotEmpty, progressHelper);
   }
 
   /**
@@ -778,12 +905,13 @@ public final class Files {
    *
    * @param path the {@code Path} to delete
    * @param retryDirNotEmpty enable retry for {@link DirectoryNotEmptyException}
+   * @param progressHelper a helper task run between retry attempts
    */
-  private static void deleteTreeWithBackgroundRetry(Path path, boolean retryDirNotEmpty) {
+  private static void deleteTreeWithBackgroundRetry(Path path, boolean retryDirNotEmpty, Runnable progressHelper) {
     RetryingDeleteTask deleteTask = new RetryingDeleteTask(DELETE_EXECUTOR, () -> {
-      treeDelete(path, retryDirNotEmpty, OPERATION_ATTEMPTS, OPERATION_REPEAT_DELAY);
+      treeDelete(path);
       return null;
-    }, path, retryDirNotEmpty);
+    }, path, retryDirNotEmpty, progressHelper);
     deleteTask.run();
   }
 
@@ -791,10 +919,6 @@ public final class Files {
    * Deletes the file or directory tree retrying for select {@link FileSystemException} and, optionally,
    * a {@link DirectoryNotEmptyException}.  The tree is walked <i>without</i> following links.
    * @param path the file or root of the directory to delete
-   * @param retryDirNotEmpty enable retry for {@link DirectoryNotEmptyException}
-   * @param attempts the number of delete attempts permitted
-   * @param retryDelay the duration of the pause between delete retries
-   *
    * @throws DirectoryNotEmptyException if the number of deletion attempts for
    *      {@code DirectoryNotEmptyException} is exhausted or the retries are interrupted
    * @throws FileSystemException for a retryable exception if the time permitted for rename attempts
@@ -802,19 +926,13 @@ public final class Files {
    * @throws IllegalArgumentException if {@code attempts} is not positive or {@code retryDelay} is negative
    * @throws IOException if the delete failed
    */
-  private static void treeDelete(Path path, boolean retryDirNotEmpty, int attempts, Duration retryDelay)
+  private static void treeDelete(Path path)
       throws IOException {
-    if (attempts <= 0) {
-      throw new IllegalArgumentException("attempts must be positive");
-    }
-    if (retryDelay.isNegative()) {
-      throw new IllegalArgumentException("retryDelay duration must be non-negative");
-    }
-
     java.nio.file.Files.walkFileTree(path, new SimpleFileVisitor<Path>() {
       @Override
       public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-        retryingDelete(file, retryDirNotEmpty, attempts, retryDelay);
+        // We're deleting -- if the file/directory is already deleted, we don't care
+        java.nio.file.Files.deleteIfExists(file);
         return FileVisitResult.CONTINUE;
       }
 
@@ -823,100 +941,12 @@ public final class Files {
         if (exc != null) {
           throw exc;
         } else {
-          retryingDelete(dir, retryDirNotEmpty, attempts, retryDelay);
+          // We're deleting -- if the file/directory is already deleted, we don't care
+          java.nio.file.Files.deleteIfExists(dir);
           return FileVisitResult.CONTINUE;
         }
       }
     });
-  }
-
-  /**
-   * Attempts to delete the specified path.  If {@link java.nio.file.Files#delete(Path) Files.delete}
-   * throws a select {@link FileSystemException} or {@link DirectoryNotEmptyException}, the delete is
-   * retried up to the {@code attempts} limit. If {@code path} does not exist, this method does not throw.
-   * <p>
-   * An interrupt received during the retry delay interrupts the delay but is otherwise not acted
-   * upon until the delete is complete or the retry attempts are exhausted.  Once the delete activity
-   * is complete, the interrupt is re-instated and control returned to the caller either via return
-   * or by re-throwing the exception causing the delete to fail.
-   *
-   * @param path the path to delete
-   * @param retryDirNotEmpty enable retry for {@link DirectoryNotEmptyException}
-   * @param attempts the number of delete attempts permitted
-   * @param retryDelay the duration of the pause between delete retries
-   *
-   * @throws DirectoryNotEmptyException if the number of deletion attempts for
-   *      {@code DirectoryNotEmptyException} is exhausted or the retries are interrupted
-   * @throws FileSystemException for a retryable exception if the time permitted for rename attempts
-   *          and retryable exception handling is exhausted or interrupted
-   * @throws IOException if the delete failed
-   *
-   * @see java.nio.file.Files#delete(Path)
-   */
-  private static void retryingDelete(Path path, boolean retryDirNotEmpty, int attempts, Duration retryDelay)
-      throws IOException {
-    assert attempts > 0;
-    assert !retryDelay.isNegative();
-
-    if (LOGGER.isDebugEnabled()) {
-      LOGGER.debug("[retryingDelete] Deleting \"{}\"", path);
-    }
-
-    boolean interrupted = Thread.interrupted();
-    try {
-      IOException last = null;
-      int tries;
-      for (tries = 0; tries < attempts; tries++) {
-        try {
-          // We're deleting -- if the file/directory is already deleted, we don't care
-          java.nio.file.Files.deleteIfExists(path);
-          return;
-        } catch (DirectoryNotEmptyException e) {
-          last = e;
-          if (retryDirNotEmpty) {
-            try {
-              TimeUnit.NANOSECONDS.sleep(retryDelay.toNanos());
-            } catch (InterruptedException ex) {
-              // Remember the interrupt and continue trying to delete
-              interrupted = true;
-            }
-          } else {
-            break;
-          }
-        } catch (FileSystemException e) {
-          /*
-           * Retry the retryable FileSystemExceptions.
-           */
-          last = e;
-          if ((e instanceof AccessDeniedException) || RETRY_REASONS.contains(e.getReason())) {
-            try {
-              TimeUnit.NANOSECONDS.sleep(retryDelay.toNanos());
-            } catch (InterruptedException ex) {
-              // Remember the interrupt and continue trying to delete
-              interrupted = true;
-            }
-          } else {
-            /*
-             * A FileSystemException for which retry is not enabled...
-             */
-            break;
-          }
-        } catch (IOException e) {
-          last = e;
-          break;
-        }
-      }
-
-      if (LOGGER.isDebugEnabled()) {
-        LOGGER.debug("Delete for \"{}\" failed; tries={}", path, tries, last);
-      }
-      throw last;
-
-    } finally {
-      if (interrupted) {
-        Thread.currentThread().interrupt();
-      }
-    }
   }
 
   /**
@@ -927,6 +957,7 @@ public final class Files {
    * @param originalPath the file/directory path to rename
    * @param targetNameSupplier the {@code Supplier} from which the new name is obtained
    * @param renameTimeLimit the time limit to apply to renaming the file/directory before deletion
+   * @param progressHelper a helper task run between retry attempts
    * @return the name to which {@code originalPath} was renamed
    *
    * @throws AtomicMoveNotSupportedException if {@code targetNameSupplier} provides an
@@ -934,17 +965,16 @@ public final class Files {
    *      indicates that a copy/delete needs to be done in place of a rename
    * @throws FileSystemException for a retryable exception if the time permitted for rename attempts
    *          and retryable exception handling is exhausted or interrupted
-   * @throws IllegalArgumentException if {@code renameTimeLimit} is not at least twice {@link #OPERATION_REPEAT_DELAY}
    * @throws InvalidPathException if {@code targetNameSupplier} returns a bad path
    * @throws IOException if the rename failed
    *
    * @see java.nio.file.Files#move(Path, Path, CopyOption...)
    */
-  private static Path retryingRename(Path originalPath, Supplier<String> targetNameSupplier, Duration renameTimeLimit)
+  private static Path retryingRename(Path originalPath, Supplier<String> targetNameSupplier, Duration renameTimeLimit, Runnable progressHelper)
       throws IOException {
     Supplier<Path> renamePathSupplier =
         () -> originalPath.resolveSibling(originalPath.getFileSystem().getPath(targetNameSupplier.get()));
-    return retryingRenamePath(originalPath, renamePathSupplier, renameTimeLimit);
+    return retryingRenamePath(originalPath, renamePathSupplier, renameTimeLimit, progressHelper);
   }
 
   /**
@@ -955,10 +985,14 @@ public final class Files {
    * A {@link Thread#interrupt()} call does not interrupt the rename operation -- the rename
    * process continues until it completes (successfully or with a failure) at which point the
    * interrupt is re-asserted before control is returned to the caller.
+   * <p>
+   * The {@code progressHelper} will be run between retries of the operation. This can be used
+   * by the caller to perform cleanup that may allow subsequent retry attempts to make progress.
    *
    * @param originalPath the file/directory path to rename
    * @param renamePathSupplier the {@code Supplier} from which the new path is obtained
    * @param renameTimeLimit the time limit to apply to renaming the file/directory before deletion
+   * @param progressHelper a helper task run between retry attempts
    * @return the name to which {@code originalPath} was renamed
    *
    * @throws AtomicMoveNotSupportedException if {@code renamePathSupplier} provides an
@@ -966,27 +1000,25 @@ public final class Files {
    *      indicates that a copy/delete needs to be done in place of a rename
    * @throws FileSystemException for a retryable exception if the time permitted for rename attempts
    *          and retryable exception handling is exhausted or interrupted
-   * @throws IllegalArgumentException if {@code renameTimeLimit} is not at least twice {@link #OPERATION_REPEAT_DELAY}
+   * @throws IllegalArgumentException if {@code renameTimeLimit} is negative
    * @throws IOException if the rename failed
    *
    * @see java.nio.file.Files#move(Path, Path, CopyOption...)
    */
-  private static Path retryingRenamePath(Path originalPath, Supplier<Path> renamePathSupplier, Duration renameTimeLimit)
+  private static Path retryingRenamePath(Path originalPath, Supplier<Path> renamePathSupplier, Duration renameTimeLimit, Runnable progressHelper)
       throws IOException {
 
-    if (renameTimeLimit.compareTo(MINIMUM_TIME_LIMIT) < 0) {
-      throw new IllegalArgumentException("renameTimeLimit must be greater than " + MINIMUM_TIME_LIMIT);
+    if (renameTimeLimit.isNegative()) {
+      throw new IllegalArgumentException("renameTimeLimit must be greater than 0");
     }
 
     boolean interrupted = Thread.interrupted();
     try {
-      IOException last;
-      Path renamePath;
-      boolean unexpected = false;
       long startTime = System.nanoTime();
       long deadline = startTime + renameTimeLimit.toNanos();
+      long operationDelay = operationDelay(renameTimeLimit);
       do {
-        renamePath = renamePathSupplier.get();
+        Path renamePath = renamePathSupplier.get();
         if (LOGGER.isDebugEnabled()) {
           LOGGER.debug("Renaming \"{}\" to \"{}\"", originalPath, renamePath);
         }
@@ -1000,10 +1032,15 @@ public final class Files {
           /*
            * Retry the retryable FileSystemExceptions.
            */
-          last = e;
           if ((e instanceof AccessDeniedException) || RETRY_REASONS.contains(e.getReason())) {
             try {
-              TimeUnit.NANOSECONDS.sleep(OPERATION_REPEAT_DELAY.toNanos());
+              progressHelper.run();
+            } catch (Throwable t) {
+              LOGGER.warn("Progress helper failed during rename of \"{}\": {}", originalPath, t);
+              throw t;
+            }
+            try {
+              TimeUnit.NANOSECONDS.sleep(operationDelay);
             } catch (InterruptedException ex) {
               // Remember the interrupt and continue trying to rename
               interrupted = true;
@@ -1016,26 +1053,49 @@ public final class Files {
             /*
              * A FileSystemException for which retry is not enabled...
              */
-            unexpected = true;
-            break;
+            LOGGER.warn("Unexpected IOException renaming \"{}\" to \"{}\"; elapsedTime={}",
+                    originalPath, renamePath, Duration.ofNanos(System.nanoTime() - startTime), e);
+            throw e;
           }
         } catch (IOException e) {
-          last = e;
-          unexpected = true;
-          break;
+          LOGGER.warn("Unexpected IOException renaming \"{}\" to \"{}\"; elapsedTime={}",
+                  originalPath, renamePath, Duration.ofNanos(System.nanoTime() - startTime), e);
+          throw e;
         }
       } while (deadline - System.nanoTime() >= 0);
 
-      /*
-       * At this point, the number of rename attempts has been exhausted.
-       */
-      LOGGER.warn("{} IOException renaming \"{}\" to \"{}\"; elapsedTime={}",
-          (unexpected ? "Unexpected" : "Persistent"), originalPath, renamePath, Duration.ofNanos(System.nanoTime() - startTime), last);
-      throw last;
-
+      Path renamePath = renamePathSupplier.get();
+      if (LOGGER.isDebugEnabled()) {
+        LOGGER.debug("Renaming \"{}\" to \"{}\"", originalPath, renamePath);
+      }
+      try {
+        java.nio.file.Files.move(originalPath, renamePath, StandardCopyOption.ATOMIC_MOVE);
+        return renamePath;
+      } catch (FileSystemException e) {
+        /*
+         * At this point, the number of rename attempts has been exhausted.
+         */
+        LOGGER.warn("{} IOException renaming \"{}\" to \"{}\"; elapsedTime={}",
+                ((e instanceof AccessDeniedException) || RETRY_REASONS.contains(e.getReason()) ? "Persistent" : "Unexpected"),
+                originalPath, renamePath, Duration.ofNanos(System.nanoTime() - startTime), e);
+        throw e;
+      }
     } finally {
       if (interrupted) {
         Thread.currentThread().interrupt();
+      }
+    }
+  }
+
+  private static long operationDelay(Duration renameTimeLimit) {
+    if (MINIMUM_OPERATION_REPEAT_DELAY.compareTo(renameTimeLimit) > 0) {
+      return -1L;
+    } else {
+      Duration nominalDelay = renameTimeLimit.dividedBy(MAXIMUM_OPERATION_ATTEMPTS);
+      if (nominalDelay.compareTo(MINIMUM_OPERATION_REPEAT_DELAY) < 0) {
+        return MINIMUM_OPERATION_REPEAT_DELAY.toNanos();
+      } else {
+        return nominalDelay.toNanos();
       }
     }
   }
@@ -1063,17 +1123,30 @@ public final class Files {
    * delete the file/directory.
    */
   private static class RetryingDeleteTask extends FutureTask<Void> {
+
+    private static final int LOGGING_SUPPRESSION_FACTOR = 10;
+
     private final ExecutorService executor;
     private final Callable<Void> task;
     private final Path deletionPath;
     private final boolean retryDirNotEmpty;
+    private final Runnable progressHelper;
+    private final Predicate<FileSystemException> shouldLog;
+    {
+      Map<Class<?>, Predicate<String>> seen = new HashMap<>();
+      shouldLog = throwable -> seen.computeIfAbsent(throwable.getClass(), tClass -> {
+        Map<String, Integer> observed = new HashMap<>();
+        return reason -> observed.merge(reason, 1, Integer::sum) % LOGGING_SUPPRESSION_FACTOR == 1;
+      }).test(throwable.getReason());
+    }
 
-    private RetryingDeleteTask(ExecutorService executor, Callable<Void> deletionTask, Path deletionPath, boolean retryDirNotEmpty) {
+    private RetryingDeleteTask(ExecutorService executor, Callable<Void> deletionTask, Path deletionPath, boolean retryDirNotEmpty, Runnable progressHelper) {
       super(deletionTask);
       this.executor = executor;
       this.task = deletionTask;
       this.deletionPath = deletionPath;
       this.retryDirNotEmpty = retryDirNotEmpty;
+      this.progressHelper = progressHelper;
     }
 
     @Override
@@ -1087,7 +1160,7 @@ public final class Files {
 
       } catch (DirectoryNotEmptyException e) {
         if (retryDirNotEmpty) {
-          LOGGER.warn("Failed to delete \"{}\" - retrying", deletionPath, e);
+          logFailedAttempt(e);
         } else {
           LOGGER.warn("Background deletion of \"{}\" failed - manual cleanup needed", deletionPath, e);
           setException(e);
@@ -1095,7 +1168,7 @@ public final class Files {
         }
       } catch (FileSystemException e) {
         if ((e instanceof AccessDeniedException) || RETRY_REASONS.contains(e.getReason())) {
-          LOGGER.warn("Failed to delete \"{}\" - retrying", deletionPath, e);
+          logFailedAttempt(e);
         } else {
           setException(e);
           retry = false;
@@ -1118,12 +1191,25 @@ public final class Files {
        */
       if (retry) {
         try {
-          executor.execute(this);
-          LOGGER.info("Submitted background deletion task for \"{}\"", deletionPath);
-        } catch (RejectedExecutionException e) {
-          setException(e);
-          LOGGER.warn("Background deletion for \"{}\" failed - manual cleanup needed", deletionPath, e);
+          progressHelper.run();
+        } catch (Throwable t) {
+          LOGGER.warn("Progress helper failed during rename of \"{}\": {}", deletionPath, t);
+          throw t;
+        } finally {
+          try {
+            executor.execute(this);
+            LOGGER.info("Submitted background deletion task for \"{}\"", deletionPath);
+          } catch (RejectedExecutionException e) {
+            setException(e);
+            LOGGER.warn("Background deletion for \"{}\" failed - manual cleanup needed", deletionPath, e);
+          }
         }
+      }
+    }
+
+    private void logFailedAttempt(FileSystemException t) {
+      if (shouldLog.test(t)) {
+        LOGGER.warn("Failed to delete \"{}\" - retrying", deletionPath, t);
       }
     }
   }
