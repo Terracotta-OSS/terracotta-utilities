@@ -45,10 +45,6 @@
       <artifactId>slf4j-api</artifactId>
     </dependency>
     <dependency>
-      <groupId>com.github.spotbugs</groupId>
-      <artifactId>spotbugs-annotations</artifactId>
-    </dependency>
-    <dependency>
       <groupId>org.terracotta</groupId>
       <artifactId>terracotta-utilities-test-tools</artifactId>
       <version>${project.version}</version>
@@ -57,6 +53,7 @@
     <dependency>
       <groupId>ch.qos.logback</groupId>
       <artifactId>logback-classic</artifactId>
+      <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>org.hamcrest</groupId>
