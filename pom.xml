@@ -253,6 +253,24 @@
                 <requireMavenVersion>
                   <version>[${maven.version},)</version>
                 </requireMavenVersion>
+                <bannedDependencies>
+                  <searchTransitive>true</searchTransitive>
+                  <excludes>
+                    <exclude>ch.qos.logback:logback-classic</exclude>
+                    <exclude>com.github.spotbugs:spotbugs-annotations</exclude>
+                    <exclude>org.hamcrest:hamcrest</exclude>
+                    <exclude>junit:junit</exclude>
+                  </excludes>
+                  <includes>
+                    <include>ch.qos.logback:logback-classic:*:*:test</include>
+                    <include>com.github.spotbugs:spotbugs-annotations:*:*:provided</include>
+                    <include>org.hamcrest:hamcrest:*:*:provided</include>
+                    <include>org.hamcrest:hamcrest:*:*:test</include>
+                    <include>junit:junit:*:*:provided</include>
+                    <include>junit:junit:*:*:test</include>
+                  </includes>
+                  <message>A banned dependency or plugin was found!</message>
+                </bannedDependencies>
               </rules>
             </configuration>
           </execution>
