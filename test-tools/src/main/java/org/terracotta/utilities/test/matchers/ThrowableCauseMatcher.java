@@ -16,7 +16,6 @@
 package org.terracotta.utilities.test.matchers;
 
 import org.hamcrest.Description;
-import org.hamcrest.Factory;
 import org.hamcrest.Matcher;
 import org.hamcrest.TypeSafeDiagnosingMatcher;
 
@@ -54,7 +53,6 @@ public class ThrowableCauseMatcher<T extends Throwable> extends TypeSafeDiagnosi
    * @return a new {@code Matcher}
    */
   @SuppressWarnings("WeakerAccess")
-  @Factory
   public static <T extends Throwable> Matcher<T> causedBy(Matcher<? extends Throwable> matcher) {
     return new ThrowableCauseMatcher<>(matcher);
   }
