@@ -51,4 +51,12 @@ public class Matchers {
   public static <T> Matcher<Optional<T>> optionalThat(Matcher<? super T> matcher) {
     return OptionalMatcher.optionalThat(matcher);
   }
+
+  public static ExceptionMatcher throwing() {
+    return ExceptionMatcher.throwing();
+  }
+
+  public static ExceptionMatcher throwing(Matcher<? super Class<? extends Throwable>> err) {
+    return ExceptionMatcher.throwing(err);
+  }
 }
