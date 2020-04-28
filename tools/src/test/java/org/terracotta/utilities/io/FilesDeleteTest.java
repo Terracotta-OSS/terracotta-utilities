@@ -29,13 +29,12 @@ import java.util.List;
 import static java.nio.file.Files.exists;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.greaterThan;
-import static org.hamcrest.Matchers.is;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.junit.Assume.assumeFalse;
 import static org.junit.Assume.assumeTrue;
-import static org.terracotta.utilities.test.WaitForAssert.assertThatEventually;
+import static org.terracotta.utilities.test.matchers.Eventually.within;
 
 /**
  * Tests the {@link Files} {@code delete} methods.
@@ -208,7 +207,7 @@ public class FilesDeleteTest extends FilesTestBase {
       assertTrue(Thread.interrupted());
     }
 
-    assertThatEventually(() -> exists(topFile, LinkOption.NOFOLLOW_LINKS), is(false)).within(Duration.ofSeconds(5L));
+    assertThat(()  -> exists(topFile, LinkOption.NOFOLLOW_LINKS), within(Duration.ofSeconds(5L)).is(false));
     assertThat(helperCalls[0], greaterThan(0));
   }
 }

@@ -35,11 +35,19 @@ public final class WaitForAssert {
 
   private WaitForAssert() {}
 
+  /**
+   * @deprecated replaced by {@link org.terracotta.utilities.test.matchers.Eventually#within(Duration)}
+   */
+  @Deprecated
   public static <T> EventualAssertion assertThatEventually(Supplier<T> value, Matcher<? super T> matcher) {
     return new EventualAssertion().and(value, matcher);
   }
 
 
+  /**
+   * @deprecated replaced by {@link org.terracotta.utilities.test.matchers.Eventually.Timeout#execsCleanly(Callable)}
+   */
+  @Deprecated
   public static void assertThatCleanly(Callable<?> task, Duration timeout) throws TimeoutException {
     AtomicReference<Throwable> failure = new AtomicReference<>();
     try {
@@ -60,6 +68,10 @@ public final class WaitForAssert {
     }
   }
 
+  /**
+   * @deprecated replaced by {@link org.terracotta.utilities.test.matchers.Eventually.Timeout}
+   */
+  @Deprecated
   public static final class EventualAssertion {
 
     private final Collection<Runnable> assertions = new ArrayList<>();

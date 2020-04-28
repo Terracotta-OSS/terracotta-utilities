@@ -19,11 +19,9 @@ import org.junit.Test;
 
 import java.util.NoSuchElementException;
 
-import static org.hamcrest.Matchers.allOf;
-import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.instanceOf;
+import static org.hamcrest.Matchers.stringContainsInOrder;
 import static org.junit.Assert.assertThat;
-import static org.terracotta.utilities.test.TerracottaAssert.assertThrows;
 import static org.terracotta.utilities.test.matchers.ThrowableCauseMatcher.causedBy;
 
 /**
@@ -33,19 +31,16 @@ public class ThrowableCauseMatcherTest {
 
   @Test
   public void testSuccessfulMatch() {
-    assertThrows(() -> {
-      throw new Exception("top", new NoSuchElementException());
-    }, allOf(instanceOf(Exception.class), causedBy(instanceOf(NoSuchElementException.class))));
+    assertThat(new Exception("top", new NoSuchElementException()), causedBy(instanceOf(NoSuchElementException.class)));
   }
 
   @Test
   public void testNoCause() {
     try {
-      assertThrows(() -> {
-        throw new Exception("top");
-      }, allOf(instanceOf(Exception.class), causedBy(instanceOf(NoSuchElementException.class))));
+      assertThat(new Exception("top"), causedBy(instanceOf(NoSuchElementException.class)));
     } catch (AssertionError e) {
-      assertThat(e.getMessage(), containsString("with cause an instance of " + NoSuchElementException.class.getName() + " null"));
+      assertThat(e.getMessage(), stringContainsInOrder(
+              "Expected:", "with cause an instance of " + NoSuchElementException.class.getName(), "but:", "null"));
     }
   }
 }
