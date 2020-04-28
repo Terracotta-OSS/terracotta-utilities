@@ -18,6 +18,7 @@ package org.terracotta.utilities.test;
 import org.hamcrest.Matcher;
 
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.terracotta.utilities.test.matchers.ThrowsMatcher.threw;
 
 public final class TerracottaAssert {
 
@@ -29,23 +30,20 @@ public final class TerracottaAssert {
    * Asserts the supplied {@link Task} throws an exception matching the {@link Matcher} provided.
    * @param task the {@code Task} to execute
    * @param matcher the Hamcrest {@code Matcher} to apply to the {@code Throwable} thrown by {@code task}
+   * @deprecated replaced by {@link org.terracotta.utilities.test.matchers.ThrowsMatcher#threw(Matcher)}
    */
+  @Deprecated
   public static void assertThrows(Task<?> task, Matcher<Throwable> matcher) {
-    try {
-      task.execute();
-    } catch (Throwable t) {
-      assertThat(t, matcher);
-      return;
-    }
-    assertThat(null, matcher);
+    assertThat(task::execute, threw(matcher));
   }
 
   /**
    * A task that returns a result and may throw a {@link Throwable}.  Similar to
    * {@link java.util.concurrent.Callable Callable}.
    * @param <R> the return type
+   * @deprecated replaced by {@link org.terracotta.utilities.test.matchers.ThrowsMatcher.Task}
    */
-  @FunctionalInterface
+  @FunctionalInterface @Deprecated
   public interface Task<R> {
     R execute() throws Throwable;
   }

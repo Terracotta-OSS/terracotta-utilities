@@ -37,6 +37,7 @@ import static org.terracotta.utilities.test.WaitForAssert.assertThatEventually;
 /**
  * @author Clifford W. Johnson
  */
+@SuppressWarnings("deprecation")
 public class WaitForAssertTest {
 
   @Rule
