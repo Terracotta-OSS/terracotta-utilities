@@ -18,20 +18,22 @@ package org.terracotta.utilities.test.port_locking;
 public class LockingPortChooser {
   private final PortAllocator portAllocator;
   private final PortLocker portLocker;
+  private final int retryLimit;
 
-  public LockingPortChooser(PortAllocator portAllocator, PortLocker portLocker) {
+  public LockingPortChooser(PortAllocator portAllocator, PortLocker portLocker, int retryLimit) {
     this.portAllocator = portAllocator;
     this.portLocker = portLocker;
+    this.retryLimit = retryLimit;
   }
 
   public synchronized MuxPortLock choosePorts(int portCount) {
-    while (true) {
+    for (int i = 0; i < retryLimit; i++) {
       MuxPortLock muxPortLock = tryChoosePorts(portCount);
-
       if (muxPortLock != null) {
         return muxPortLock;
       }
     }
+    throw new PortLockingException("Failed to obtain " + portCount + " consecutive ports in " + retryLimit + " attempts");
   }
 
   private MuxPortLock tryChoosePorts(int portCount) {

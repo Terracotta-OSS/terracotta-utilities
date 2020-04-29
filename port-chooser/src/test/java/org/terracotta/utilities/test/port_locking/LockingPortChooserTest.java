@@ -21,11 +21,6 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnitRunner;
 import org.mockito.stubbing.Answer;
-import org.terracotta.utilities.test.port_locking.LockingPortChooser;
-import org.terracotta.utilities.test.port_locking.MuxPortLock;
-import org.terracotta.utilities.test.port_locking.PortAllocator;
-import org.terracotta.utilities.test.port_locking.PortLock;
-import org.terracotta.utilities.test.port_locking.PortLocker;
 
 import java.util.BitSet;
 
@@ -46,7 +41,7 @@ public class LockingPortChooserTest {
 
   @Before
   public void before() {
-    portChooser = new LockingPortChooser(portAllocator, portLocker);
+    portChooser = new LockingPortChooser(portAllocator, portLocker, 10);
     when(portLocker.tryLockPort(anyInt())).thenAnswer((Answer<PortLock>)invocation -> {
       int port = invocation.getArgument(0);
       if (locks.get(port)) {

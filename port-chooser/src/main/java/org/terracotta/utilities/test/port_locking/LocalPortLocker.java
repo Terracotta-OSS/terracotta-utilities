@@ -23,13 +23,11 @@ public class LocalPortLocker implements PortLocker {
 
   @Override
   public PortLock tryLockPort(int port) {
-    boolean added = localPortLocks.add(port);
-
-    if (!added) {
+    if (localPortLocks.add(port)) {
+      return new LocalPortLock(port);
+    } else {
       return null;
     }
-
-    return new LocalPortLock(port);
   }
 
   private static class LocalPortLock implements PortLock {
@@ -46,9 +44,7 @@ public class LocalPortLocker implements PortLocker {
 
     @Override
     public void close() {
-      boolean removed = localPortLocks.remove(port);
-
-      if (!removed) {
+      if (!localPortLocks.remove(port)) {
         throw new AssertionError("Attempted to remove local lock on port " + port + " but it was not present");
       }
     }

@@ -19,14 +19,17 @@ import java.security.SecureRandom;
 
 public class LockingPortChoosers {
 
+  public static final String ALLOCATION_LIMIT_RETRY_PROPERTY = "org.terracotta.utilities.port_retry_limit";
+  private static final int PORT_ALLOCATION_RETRY_LIMIT = Integer.getInteger(ALLOCATION_LIMIT_RETRY_PROPERTY, 10);
+
   private static final LockingPortChooser SINGLETON = new LockingPortChooser(
       new RandomPortAllocator(new SecureRandom()),
       new MuxPortLocker(
           new LocalPortLocker(),
           new SocketPortLocker(),
           new GlobalFilePortLocker()
-      )
-  );
+      ),
+      PORT_ALLOCATION_RETRY_LIMIT);
 
   /**
    * Returns a LockingPortChooser that works by acquiring a lock for a port by creating a FileLock on the corresponding

@@ -29,12 +29,10 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.fail;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @RunWith(MockitoJUnitRunner.class)
 public class GlobalFilePortLockTest {
-  @Mock
-  private RandomAccessFile file;
-
   @Mock
   private Channel channel;
 
@@ -43,20 +41,20 @@ public class GlobalFilePortLockTest {
 
   @Test
   public void happyPath() throws Exception {
-    PortLock portLock = new GlobalFilePortLock(1, file, channel, lock);
+    when(lock.acquiredBy()).thenReturn(channel);
+    PortLock portLock = new GlobalFilePortLock(1, lock);
     assertEquals(1, portLock.getPort());
     portLock.close();
-    verify(file).close();
     verify(channel).close();
     verify(lock).close();
   }
 
   @Test
   public void closesThrow() throws Exception {
-    doThrow(IOException.class).when(file).close();
+    when(lock.acquiredBy()).thenReturn(channel);
     doThrow(IOException.class).when(channel).close();
     doThrow(IOException.class).when(lock).close();
-    PortLock portLock = new GlobalFilePortLock(1, file, channel, lock);
+    PortLock portLock = new GlobalFilePortLock(1, lock);
     assertEquals(1, portLock.getPort());
     try {
       portLock.close();
@@ -64,7 +62,6 @@ public class GlobalFilePortLockTest {
     } catch (PortLockingException e) {
       // Expected
     }
-    verify(file).close();
     verify(channel).close();
     verify(lock).close();
   }
