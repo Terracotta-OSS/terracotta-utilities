@@ -102,7 +102,7 @@ public final class CommonFiles {
        * Get the location of Windows CommonApplicationData special folder
        * creating it if necessary.
        */
-      commonFolder = getSpecialFolder("CommonApplicationData", true);
+      commonFolder = WindowsSpecialFolder.COMMON_APPLICATION_DATA.get();
     } else {
       /*
        * For *NIX, use '/var/tmp'.  This should be "world" writable.
@@ -417,49 +417,6 @@ public final class CommonFiles {
   }
 
   /**
-   * Gets the {@link Path} to the identified Windows Special Folder.
-   *
-   * @param specialFolderId the special folder identifier
-   * @param create          if {@code true}, attempts to create the folder if it does not exist
-   * @return the path to the special folder; an empty path is returned if the folder does not exist
-   * @throws IOException if the special folder value cannot be determined
-   * @see <a href="https://docs.microsoft.com/en-us/dotnet/api/system.environment.specialfolder?view=netframework-4.8">
-   * Environment.SpecialFolder Enum</a>
-   * @see <a href="https://docs.microsoft.com/en-us/dotnet/api/system.environment.getfolderpath?view=netframework-4.8">
-   * Environment.GetFolderPath Method</a>
-   */
-  private static Path getSpecialFolder(String specialFolderId, boolean create) throws IOException {
-    String[] command = new String[] {
-        "powershell.exe",
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        "&{$ErrorActionPreference = 'Stop'; " +
-            "[environment]::getfolderpath('" + specialFolderId + "'" + (create ? ", 'create'" : "") + ")}" };
-
-    String specialFolder;
-    Shell.Result result;
-    try {
-      result = Shell.execute(Shell.Encoding.CHARSET, command);
-    } catch (IOException e) {
-      LOGGER.error("Unable to determine special folder for {}; {} failed",
-          specialFolderId, Arrays.toString(command), e);
-      throw e;
-    }
-    if (result.exitCode() == 0) {
-      specialFolder = result.lines().get(0);
-    } else {
-      SpecialFolderException exception =
-          new SpecialFolderException(specialFolderId, result.lines(), result.exitCode());
-      LOGGER.error("Unable to determine special folder for {}", specialFolderId, exception);
-      throw exception;
-    }
-
-    return Paths.get(specialFolder);
-  }
-
-  /**
    * Logs the POSIX permissions for a {@code Path} at the logging level specified.
    *
    * @param description a description to write ahead of the logged permissions
@@ -525,24 +482,6 @@ public final class CommonFiles {
           bridge.log("Unable to run ICACLS for \"{}\"", path, e);
         }
       }
-    }
-  }
-
-  /**
-   * Thrown when the folder assigned to a Windows Special Folder identifier cannot be determined.
-   */
-  public static class SpecialFolderException extends IOException {
-    private static final long serialVersionUID = 8319003610562205355L;
-    private final int code;
-
-    private SpecialFolderException(String specialFolder, List<String> errorDetail, int code) {
-      super("Error determining directory assigned to special folder \"" + specialFolder + "\"; rc=" + code
-          + (errorDetail == null ? "" : "\n    " + String.join("\n    ", errorDetail)));
-      this.code = code;
-    }
-
-    public int code() {
-      return code;
     }
   }
 

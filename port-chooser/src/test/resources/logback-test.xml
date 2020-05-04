@@ -26,6 +26,7 @@
   <logger name="org.terracotta.utilities.io.FilesTestBase" level="INFO"/>
   <logger name="org.terracotta.utilities.io.FilesCopyTest" level="INFO"/>
   <logger name="org.terracotta.utilities.exec.Shell" level="INFO"/>
+  <logger name="org.terracotta.utilities.test.net" level="INFO"/>
 
   <root level="INFO">
     <appender-ref ref="STDOUT"/>
