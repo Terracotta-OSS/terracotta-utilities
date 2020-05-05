@@ -77,7 +77,7 @@ public class ThrowsMatcherTest {
     } catch (AssertionError e) {
       assertThat(e, hasMessage(stringContainsInOrder(
               "Expected:",  "task that throws an instance of java.lang.IllegalArgumentException",
-              "but:", "was \"Hello World\"")));
+              "but:", "was String \"Hello World\"")));
 
     }
   }

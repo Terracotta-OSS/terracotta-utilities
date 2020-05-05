@@ -27,9 +27,9 @@
   </parent>
 
   <groupId>org.terracotta</groupId>
-  <artifactId>terracotta-utilities-test-tools</artifactId>
-  <name>Terracotta Utilities Test Tools</name>
-  <description>Utility classes/methods for use in testing</description>
+  <artifactId>terracotta-utilities-port-chooser</artifactId>
+  <name>Terracotta Utilities Port Chooser</name>
+  <description>Utility classes for TCP port management</description>
   <url>https://github.com/Terracotta-OSS/terracotta-utilities/</url>
 
   <licenses>
@@ -37,56 +37,48 @@
       <name>The Apache License, Version 2.0</name>
       <url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
     </license>
-    <license>
-      <!-- License for JUnit TemporaryFolder -->
-      <name>Eclipse Public License - v 1.0</name>
-      <url>https://www.eclipse.org/legal/epl-v10.html</url>
-    </license>
   </licenses>
 
   <dependencies>
     <dependency>
-      <groupId>org.hamcrest</groupId>
-      <artifactId>hamcrest</artifactId>
-      <scope>provided</scope>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
     </dependency>
     <dependency>
-      <groupId>org.hamcrest</groupId>
-      <artifactId>hamcrest-library</artifactId>
-      <scope>provided</scope>
+      <groupId>org.terracotta</groupId>
+      <artifactId>terracotta-utilities-tools</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.terracotta</groupId>
+      <artifactId>terracotta-utilities-test-tools</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>junit</groupId>
       <artifactId>junit</artifactId>
-      <scope>provided</scope>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.hamcrest</groupId>
+      <artifactId>hamcrest</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.mockito</groupId>
+      <artifactId>mockito-core</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>ch.qos.logback</groupId>
+      <artifactId>logback-classic</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.github.spotbugs</groupId>
+      <artifactId>spotbugs-annotations</artifactId>
     </dependency>
   </dependencies>
-
-  <build>
-    <plugins>
-      <plugin>
-        <groupId>com.github.spotbugs</groupId>
-        <artifactId>spotbugs-maven-plugin</artifactId>
-        <configuration>
-          <excludeFilterFile>${project.basedir}/config/spotbugs/excludeFilter.xml</excludeFilterFile>
-        </configuration>
-      </plugin>
-      <plugin>
-        <groupId>org.apache.rat</groupId>
-        <artifactId>apache-rat-plugin</artifactId>
-        <configuration>
-          <excludes>
-            <exclude>README.md</exclude>
-            <!-- Exclude content imported from JUnit -->
-            <exclude>LICENSE-*</exclude>
-            <exclude>NOTICE-*</exclude>
-            <exclude>src/main/java/org/terracotta/org/junit/**</exclude>
-            <exclude>src/test/java/org/terracotta/org/junit/**</exclude>
-          </excludes>
-        </configuration>
-      </plugin>
-    </plugins>
-  </build>
 
   <scm>
     <connection>scm:git:https://github.com/terracotta-oss/terracotta-utilities.git</connection>
