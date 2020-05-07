@@ -68,7 +68,12 @@ public final class Shell {
         commandLines.add(line);
       }
     }
-    int rc = process.exitValue();
+    int rc;
+    try {
+      rc = process.waitFor();
+    } catch (InterruptedException e) {
+      throw new IOException(e);
+    }
 
     if (LOGGER.isDebugEnabled()) {
       LOGGER.debug("Command: {}; rc={}", Arrays.toString(command), rc);
