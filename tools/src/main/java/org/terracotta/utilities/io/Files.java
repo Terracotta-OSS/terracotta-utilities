@@ -56,6 +56,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -78,6 +79,7 @@ import static java.nio.file.Files.isSameFile;
 import static java.nio.file.Files.isSymbolicLink;
 import static java.nio.file.LinkOption.NOFOLLOW_LINKS;
 import static java.nio.file.StandardCopyOption.COPY_ATTRIBUTES;
+import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 
 /**
  * Provides <i>sane</i> file management operations.
@@ -124,7 +126,8 @@ import static java.nio.file.StandardCopyOption.COPY_ATTRIBUTES;
  * @author Clifford W. Johnson
  */
 public final class Files {
-  private static Logger LOGGER = LoggerFactory.getLogger(Files.class);
+  private static final Logger LOGGER = LoggerFactory.getLogger(Files.class);
+  protected static final boolean IS_WINDOWS = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("win");
 
   private static final Duration MINIMUM_OPERATION_REPEAT_DELAY = Duration.ofMillis(50);
   private static final int MAXIMUM_OPERATION_ATTEMPTS = 10;
@@ -841,6 +844,38 @@ public final class Files {
     copyOptions.add(NOFOLLOW_LINKS);
     copyOptions.add(COPY_ATTRIBUTES);
     copyOptions.add(ExtendedOption.RECURSIVE);
+
+    // Resolve target using rules for Files.move instead of _our_ rename
+    target = target.toAbsolutePath();
+
+    /*
+     * If the caller didn't specify REPLACE_EXISTING, attempt to create the target
+     * file and add REPLACE_EXISTING to the options.  Rename (move w/ATOMIC_MOVE),
+     * will replace a _proper_ target on Windows and _most_ *NIX systems.
+     * Unfortunately, the target that can be replaced is system dependent -- see
+     * FilesEnvironmentTest for details.
+     */
+    if (!copyOptions.contains(REPLACE_EXISTING)) {
+      try {
+        if (java.nio.file.Files.isDirectory(source)) {
+          if (IS_WINDOWS) {
+            // On Windows, a directory can only replace a file
+            java.nio.file.Files.createFile(target);
+          } else {
+            // On *NIX, a directory can only replace a directory
+            java.nio.file.Files.createDirectory(target);
+          }
+        } else {
+          // Use a file for a file or a symbolic link
+          java.nio.file.Files.createFile(target);
+        }
+      } catch (AccessDeniedException e) {
+        FileAlreadyExistsException ex = new FileAlreadyExistsException(source.toString(), target.toString(), null);
+        ex.initCause(e);
+        throw ex;
+      }
+      copyOptions.add(REPLACE_EXISTING);
+    }
 
     try {
       return rename(source, target);      // If rename was successful, we're done

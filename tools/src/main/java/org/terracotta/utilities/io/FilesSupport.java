@@ -287,7 +287,7 @@ class FilesSupport {
    */
   private static class PathHolder implements AutoCloseable {
     // Needs a local LOGGER to prevent issues with initialization of Files class.
-    private static final Logger LOGGER = LoggerFactory.getLogger(Files.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(PathHolder.class);
     private final Thread thread;
     private final Phaser barrier = new Phaser(2);
 
