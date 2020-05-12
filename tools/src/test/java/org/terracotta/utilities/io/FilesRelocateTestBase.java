@@ -17,12 +17,10 @@ package org.terracotta.utilities.io;
 
 import org.junit.Before;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.CopyOption;
 import java.nio.file.Path;
 
 import static java.nio.file.Files.createDirectory;
-import static org.junit.Assume.assumeTrue;
 
 /**
  * Common core for {@link Files#relocate(Path, Path, CopyOption...)} testing.
@@ -34,26 +32,5 @@ public abstract class FilesRelocateTestBase extends FilesTestBase {
   @Before
   public void prepareTarget() throws IOException {
     target = createDirectory(root.resolve("target_" + testName.getMethodName()));  // root/target
-  }
-
-  protected static Path makeFile(Path path, Iterable<String> lines) throws IOException {
-    java.nio.file.Files.createFile(path);
-    return java.nio.file.Files.write(path, lines, StandardCharsets.UTF_8);
-  }
-
-  protected static Path makeDirectory(Path path) throws IOException {
-    return java.nio.file.Files.createDirectory(path);
-  }
-
-  protected static Path makeFileSymlink(Path filePath, Iterable<String> lines) throws IOException {
-    assumeTrue("Skipped because symbolic links cannot be created in current environment", symlinksSupported);
-    Path linkTarget = TEST_ROOT.newFile().toPath();
-    java.nio.file.Files.write(linkTarget, lines, StandardCharsets.UTF_8);
-    return java.nio.file.Files.createSymbolicLink(filePath, linkTarget);
-  }
-
-  protected static Path makeDirectorySymlink(Path dirPath) throws IOException {
-    assumeTrue("Skipped because symbolic links cannot be created in current environment", symlinksSupported);
-    return java.nio.file.Files.createSymbolicLink(dirPath, TEST_ROOT.newFolder().toPath());
   }
 }

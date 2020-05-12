@@ -291,7 +291,7 @@ public final class Files {
     Path resolvedTarget = origin.resolveSibling(target);
 
     retryingRenamePath(realOrigin, () -> resolvedTarget, renameTimeLimit, progressHelper);
-    return target;
+    return resolvedTarget;
   }
 
   /**

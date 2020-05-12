@@ -74,6 +74,7 @@ import static java.nio.file.Files.readSymbolicLink;
 import static java.nio.file.Files.write;
 import static java.util.Collections.singleton;
 import static java.util.Objects.requireNonNull;
+import static org.junit.Assume.assumeTrue;
 import static org.terracotta.utilities.exec.Shell.execute;
 
 /**
@@ -299,7 +300,7 @@ public abstract class FilesTestBase {
           try {
             Path eightDot3Path = Paths.get(result.lines().get(0));
             if (eightDot3Path.equals(rootCandidate)) {
-              LOGGER.warn("******************************************************************************\n" +
+              LOGGER.warn("\n******************************************************************************\n" +
                       "8dot3 support is not available for drive {}\n" +
                       "******************************************************************************",
                   eightDot3Path.getRoot());
@@ -338,9 +339,7 @@ public abstract class FilesTestBase {
     try {
       Path testLink = createSymbolicLink(root.resolve("testLink"), root.resolve("phantom"));
       java.nio.file.Files.delete(testLink);
-      LOGGER.info("******************************************************************************\n" +
-          "Creation of symbolic links is supported in this environment\n" +
-          "******************************************************************************");
+      LOGGER.info("Creation of symbolic links is supported in this environment");
     } catch (UnsupportedOperationException | SecurityException | FileSystemException ex) {
       symlinksSupported = false;
       if ((ex instanceof FileSystemException) && ((FileSystemException)ex).getReason() == null) {
@@ -350,7 +349,7 @@ public abstract class FilesTestBase {
          */
         throw ex;
       }
-      LOGGER.warn("******************************************************************************\n" +
+      LOGGER.warn("\n******************************************************************************\n" +
           "Creation of symbolic links is NOT supported in this environment\n" +
           "******************************************************************************");
     }
@@ -378,12 +377,10 @@ public abstract class FilesTestBase {
         Paths.get(System.getProperty("user.dir")),
         Paths.get(System.getProperty("user.home"))));
     FileSystems.getDefault().getRootDirectories().forEach(foreignCandidates::add);
-    LOGGER.info("******************************************************************************\n" +
-        "[foreignCheck] Checking foreign FileStore candidates...\n" +
-        "******************************************************************************");
+    LOGGER.debug("[foreignCheck] Checking foreign FileStore candidates...");
     Path foreignDirectory = null;
     for (Path foreignPath : foreignCandidates) {
-      LOGGER.info("[foreignCheck] Checking \"{}\"", foreignPath);
+      LOGGER.debug("[foreignCheck] Checking \"{}\"", foreignPath);
       try {
         FileStore foreignFileStore = getFileStore(foreignPath);
         if (!foreignFileStore.equals(rootFileStore)) {
@@ -410,14 +407,12 @@ public abstract class FilesTestBase {
     }
 
     if (foreignFile == null) {
-      LOGGER.warn("******************************************************************************\n" +
+      LOGGER.warn("\n******************************************************************************\n" +
           "[foreignCheck] No suitable directory found for foreign FileStore testing; suppressed\n" +
           "******************************************************************************");
       foreignFileStoreAvailable = false;
     } else {
-      LOGGER.info("******************************************************************************\n" +
-          "[foreignCheck] Using \"{}\" for foreign FileStore testing\n" +
-          "******************************************************************************", foreignDirectory);
+      LOGGER.info("[foreignCheck] Using \"{}\" for foreign FileStore testing", foreignDirectory);
       foreignFileStoreAvailable = true;
       foreignDir = foreignFile.getParent();
     }
@@ -532,6 +527,27 @@ public abstract class FilesTestBase {
     if (attributes.isSymbolicLink()) attrs.add("link");
     if (attributes.isOther()) attrs.add("other");
     return attrs;
+  }
+
+  protected static Path makeFile(Path path, Iterable<String> lines) throws IOException {
+    createFile(path);
+    return write(path, lines, UTF_8);
+  }
+
+  protected static Path makeDirectory(Path path) throws IOException {
+    return java.nio.file.Files.createDirectory(path);
+  }
+
+  protected static Path makeFileSymlink(Path filePath, Iterable<String> lines) throws IOException {
+    assumeTrue("Skipped because symbolic links cannot be created in current environment", symlinksSupported);
+    Path linkTarget = TEST_ROOT.newFile().toPath();
+    write(linkTarget, lines, UTF_8);
+    return createSymbolicLink(filePath, linkTarget);
+  }
+
+  protected static Path makeDirectorySymlink(Path dirPath) throws IOException {
+    assumeTrue("Skipped because symbolic links cannot be created in current environment", symlinksSupported);
+    return createSymbolicLink(dirPath, TEST_ROOT.newFolder().toPath());
   }
 
   /**

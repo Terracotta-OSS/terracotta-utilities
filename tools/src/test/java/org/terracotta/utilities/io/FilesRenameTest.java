@@ -15,19 +15,27 @@
  */
 package org.terracotta.utilities.io;
 
+import org.junit.Before;
 import org.junit.Test;
 
+import java.io.IOException;
+import java.nio.file.AccessDeniedException;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.FileSystemException;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.List;
 
+import static java.nio.file.Files.createDirectory;
 import static java.nio.file.Files.exists;
 import static java.nio.file.Files.isSameFile;
+import static java.util.Collections.singletonList;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.greaterThan;
+import static org.hamcrest.Matchers.is;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -38,6 +46,14 @@ import static org.junit.Assume.assumeTrue;
  * Tests the {@link Files} {@code rename} methods.
  */
 public class FilesRenameTest extends FilesTestBase {
+
+  private Path target;
+
+  @Before
+  public void prepareTarget() throws IOException {
+    target = createDirectory(root.resolve("target_" + testName.getMethodName()));  // root/target
+  }
+
 
   @Test
   public void testNullPathOrigin() throws Exception {
@@ -73,7 +89,7 @@ public class FilesRenameTest extends FilesTestBase {
   public void testFileRenameWindows() throws Exception {
     assumeTrue(isWindows);
     int[] helperCalls = new int[1];
-    Path newName = topFile.resolveSibling("newName");
+    Path newName = target.resolve("newName");
     try (PathHolder holder = new PathHolder(topFile)) {
       holder.start();
       Files.rename(topFile, newName, Duration.ofMillis(100), () -> helperCalls[0]++);
@@ -93,7 +109,7 @@ public class FilesRenameTest extends FilesTestBase {
   @Test
   public void testFileRenameLinux() throws Exception {
     assumeFalse(isWindows);
-    Path newName = topFile.resolveSibling("newName");
+    Path newName = target.resolve("newName");
     Path renamedPath = Files.rename(topFile, newName);
     assertFalse(exists(topFile, LinkOption.NOFOLLOW_LINKS));
     assertTrue(exists(newName, LinkOption.NOFOLLOW_LINKS));
@@ -101,8 +117,22 @@ public class FilesRenameTest extends FilesTestBase {
   }
 
   @Test
+  public void testFileRenameRelative() throws Exception {
+    Path newName = Paths.get("newName");
+    Path expectedNewName = topFile.resolveSibling("newName");
+    try {
+      Path renamedPath = Files.rename(topFile, newName);
+      assertFalse(exists(topFile, LinkOption.NOFOLLOW_LINKS));
+      assertTrue(exists(renamedPath, LinkOption.NOFOLLOW_LINKS));
+      assertTrue((isSameFile(expectedNewName, renamedPath)));
+    } finally {
+      java.nio.file.Files.deleteIfExists(expectedNewName);
+    }
+  }
+
+  @Test
   public void testFileRenameInTime() throws Exception {
-    Path newName = topFile.resolveSibling("newName");
+    Path newName = target.resolve("newName");
     Path renamedPath;
     try (PathHolder holder = new PathHolder(topFile, Duration.ofMillis(100))) {
       holder.start();
@@ -121,7 +151,7 @@ public class FilesRenameTest extends FilesTestBase {
 
     Path linkedFile = java.nio.file.Files.readSymbolicLink(fileLink);
 
-    Path newName = fileLink.resolveSibling("newName");
+    Path newName = target.resolve("newName");
     Path renamedPath;
     // A busy link target should not affect link deletion
     try (PathHolder holder = new PathHolder(linkedFile)) {
@@ -139,7 +169,7 @@ public class FilesRenameTest extends FilesTestBase {
   public void testBrokenLinkRename() throws Exception {
     assumeTrue("Skipped because symbolic links cannot be created in current environment", symlinksSupported);
 
-    Path newName = missingLink.resolveSibling("newName");
+    Path newName = target.resolve("newName");
     Path renamedPath = Files.rename(missingLink, newName);
     assertFalse(exists(missingLink, LinkOption.NOFOLLOW_LINKS));
     assertTrue(exists(newName, LinkOption.NOFOLLOW_LINKS));
@@ -149,7 +179,7 @@ public class FilesRenameTest extends FilesTestBase {
   @Test
   public void testNonEmptyDirectoryRenameWindows() throws Exception {
     assumeTrue(isWindows);
-    Path newName = top.resolveSibling("newName");
+    Path newName = target.resolve("newName");
     List<Path> tree = walkedTree(top);
     try (PathHolder holder = new PathHolder(childFile(top))) {
       holder.start();
@@ -172,7 +202,7 @@ public class FilesRenameTest extends FilesTestBase {
   @Test
   public void testNonEmptyDirectoryRenameLinux() throws Exception {
     assumeFalse(isWindows);
-    Path newName = top.resolveSibling("newName");
+    Path newName = target.resolve("newName");
     List<Path> tree = walkedTree(top);
     Path renamedPath = Files.rename(top, newName);
     assertFalse(exists(top, LinkOption.NOFOLLOW_LINKS));
@@ -185,7 +215,7 @@ public class FilesRenameTest extends FilesTestBase {
 
   @Test
   public void testEmptyDirectoryRename() throws Exception {
-    Path newName = emptyDir.resolveSibling("newName");
+    Path newName = target.resolve("newName");
     Path renamedPath = Files.rename(emptyDir, newName);
     assertFalse(exists(emptyDir, LinkOption.NOFOLLOW_LINKS));
     assertTrue(exists(newName, LinkOption.NOFOLLOW_LINKS));
@@ -196,7 +226,7 @@ public class FilesRenameTest extends FilesTestBase {
   public void testDirectoryLinkRename() throws Exception {
     assumeTrue("Skipped because symbolic links cannot be created in current environment", symlinksSupported);
 
-    Path newName = dirLink.resolveSibling("newName");
+    Path newName = target.resolve("newName");
     Path linkedDir = java.nio.file.Files.readSymbolicLink(dirLink);
     List<Path> tree = walkedTree(linkedDir);
 
@@ -210,5 +240,304 @@ public class FilesRenameTest extends FilesTestBase {
     assertTrue(exists(newName, LinkOption.NOFOLLOW_LINKS));
     assertTrue(isSameFile(newName, renamedPath));
     tree.forEach(p -> exists(p, LinkOption.NOFOLLOW_LINKS));
+  }
+
+  @Test
+  public void testForeignRename() throws Exception {
+    assumeTrue("Skipped because a foreign FileStore is not available", foreignFileStoreAvailable);
+    Path localForeignFile = foreignFile.resolveSibling("localForeignFile");
+    java.nio.file.Files.createFile(localForeignFile);
+    localForeignFile.toFile().deleteOnExit();
+
+    Path newName = target.resolve("newName");
+    try {
+      Files.rename(localForeignFile, newName);
+      fail("Expecting AtomicMoveNotSupportedException");
+    } catch (AtomicMoveNotSupportedException expected) {
+    } finally {
+      Files.deleteIfExists(localForeignFile);
+    }
+  }
+
+  @Test
+  public void testRenameFileToExistingFile() throws Exception {
+    Path existingPath = target.resolve("existingPath");
+    makeFile(existingPath, singletonList("existingPath"));
+
+    List<String> expectedContent = java.nio.file.Files.readAllLines(topFile);
+    Path renamedPath = Files.rename(topFile, existingPath);
+    assertFalse(exists(topFile, LinkOption.NOFOLLOW_LINKS));
+    assertTrue(exists(existingPath, LinkOption.NOFOLLOW_LINKS));
+    assertTrue(isSameFile(existingPath, renamedPath));
+    assertThat(java.nio.file.Files.readAllLines(existingPath), is(expectedContent));
+  }
+
+  @Test
+  public void testRenameFileToExistingDirectory() throws Exception {
+    Path existingPath = target.resolve("existingPath");
+    makeDirectory(existingPath);
+
+    try {
+      Files.rename(topFile, existingPath, Duration.ZERO);
+      fail("Expecting " + (isWindows ? "AccessDeniedException" : "FileSystemException"));
+    } catch (AccessDeniedException e) {
+      if (!isWindows) {
+        throw e;
+      }
+    } catch (FileSystemException e) {
+      if (isWindows) {
+        throw e;
+      }
+      assertThat(e.getReason(), is("Is a directory"));
+    }
+  }
+
+  @Test
+  public void testRenameFileToExistingFileSymlink() throws Exception {
+    Path existingPath = target.resolve("existingPath");
+    makeFileSymlink(existingPath, singletonList("existingFile"));
+
+    Path renamedPath = Files.rename(topFile, existingPath);
+    assertFalse(exists(topFile, LinkOption.NOFOLLOW_LINKS));
+    assertTrue(exists(existingPath, LinkOption.NOFOLLOW_LINKS));
+    assertTrue(isSameFile(existingPath, renamedPath));
+  }
+
+  @Test
+  public void testRenameFileToExistingDirectorySymlink() throws Exception {
+    Path existingPath = target.resolve("existingPath");
+    makeDirectorySymlink(existingPath);
+
+    try {
+      Path renamedPath = Files.rename(topFile, existingPath, Duration.ZERO);
+      if (isWindows) {
+        fail("Expecting AccessDeniedException");
+      }
+      assertFalse(exists(topFile, LinkOption.NOFOLLOW_LINKS));
+      assertTrue(exists(existingPath, LinkOption.NOFOLLOW_LINKS));
+      assertTrue(isSameFile(existingPath, renamedPath));
+    } catch (AccessDeniedException e) {
+      if (!isWindows) {
+        throw e;
+      }
+    }
+  }
+
+  @Test
+  public void testRenameDirectoryToExistingFile() throws Exception {
+    Path existingPath = target.resolve("existingPath");
+    makeFile(existingPath, singletonList("existingPath"));
+
+    try {
+      Path renamedPath = Files.rename(top, existingPath);
+      if (!isWindows) {
+        fail("Expecting FileSystemException");
+      }
+      assertFalse(exists(top, LinkOption.NOFOLLOW_LINKS));
+      assertTrue(exists(existingPath, LinkOption.NOFOLLOW_LINKS));
+      assertTrue(isSameFile(existingPath, renamedPath));
+    } catch (FileSystemException e) {
+      if (isWindows) {
+        throw e;
+      }
+      assertThat(e.getReason(), is("Not a directory"));
+    }
+  }
+
+  @Test
+  public void testRenameDirectoryToExistingDirectory() throws Exception {
+    Path existingPath = target.resolve("existingPath");
+    makeDirectory(existingPath);
+
+    try {
+      Path renamedPath = Files.rename(top, existingPath, Duration.ZERO);
+      if (isWindows) {
+        fail("Expecting AccessDeniedException");
+      }
+      assertFalse(exists(top, LinkOption.NOFOLLOW_LINKS));
+      assertTrue(exists(existingPath, LinkOption.NOFOLLOW_LINKS));
+      assertTrue(isSameFile(existingPath, renamedPath));
+    } catch (AccessDeniedException e) {
+      if (!isWindows) {
+        throw e;
+      }
+    }
+  }
+
+  @Test
+  public void testRenameDirectoryToExistingFileSymlink() throws Exception {
+    Path existingPath = target.resolve("existingPath");
+    makeFileSymlink(existingPath, singletonList("existingPath"));
+
+    try {
+      Path renamedPath = Files.rename(top, existingPath);
+      if (!isWindows) {
+        fail("Expecting FileSystemException");
+      }
+      assertFalse(exists(top, LinkOption.NOFOLLOW_LINKS));
+      assertTrue(exists(existingPath, LinkOption.NOFOLLOW_LINKS));
+      assertTrue(isSameFile(existingPath, renamedPath));
+    } catch (FileSystemException e) {
+      if (isWindows) {
+        throw e;
+      }
+      assertThat(e.getReason(), is("Not a directory"));
+    }
+  }
+
+  @Test
+  public void testRenameDirectoryToExistingDirectorySymlink() throws Exception {
+    Path existingPath = target.resolve("existingPath");
+    makeDirectorySymlink(existingPath);
+
+    try {
+      Files.rename(top, existingPath, Duration.ZERO);
+      fail("Expecting " + (isWindows ? "AccessDeniedException" : "FileSystemException"));
+    } catch (AccessDeniedException e) {
+      if (!isWindows) {
+        throw e;
+      }
+    } catch (FileSystemException e) {
+      if (isWindows) {
+        throw e;
+      }
+      assertThat(e.getReason(), is("Not a directory"));
+    }
+  }
+
+  @Test
+  public void testRenameFileSymlinkToExistingFile() throws Exception {
+    assumeTrue("Skipped because symbolic links cannot be created in current environment", symlinksSupported);
+    Path existingPath = target.resolve("existingPath");
+    makeFile(existingPath, singletonList("existingPath"));
+
+    List<String> expectedContent = java.nio.file.Files.readAllLines(fileLink);
+    Path renamedPath = Files.rename(fileLink, existingPath);
+    assertFalse(exists(fileLink, LinkOption.NOFOLLOW_LINKS));
+    assertTrue(exists(existingPath, LinkOption.NOFOLLOW_LINKS));
+    assertTrue(isSameFile(existingPath, renamedPath));
+    assertThat(java.nio.file.Files.readAllLines(existingPath), is(expectedContent));
+  }
+
+  @Test
+  public void testRenameFileSymlinkToExistingDirectory() throws Exception {
+    assumeTrue("Skipped because symbolic links cannot be created in current environment", symlinksSupported);
+    Path existingPath = target.resolve("existingPath");
+    makeDirectory(existingPath);
+
+    try {
+      Files.rename(fileLink, existingPath, Duration.ZERO);
+      fail("Expecting " + (isWindows ? "AccessDeniedException" : "FileSystemException"));
+    } catch (AccessDeniedException e) {
+      if (!isWindows) {
+        throw e;
+      }
+    } catch (FileSystemException e) {
+      if (isWindows) {
+        throw e;
+      }
+      assertThat(e.getReason(), is("Is a directory"));
+    }
+  }
+
+  @Test
+  public void testRenameFileSymlinkToExistingFileSymlink() throws Exception {
+    assumeTrue("Skipped because symbolic links cannot be created in current environment", symlinksSupported);
+    Path existingPath = target.resolve("existingPath");
+    makeFileSymlink(existingPath, singletonList("existingPath"));
+
+    List<String> expectedContent = java.nio.file.Files.readAllLines(fileLink);
+    Path renamedPath = Files.rename(fileLink, existingPath);
+    assertFalse(exists(fileLink, LinkOption.NOFOLLOW_LINKS));
+    assertTrue(exists(existingPath, LinkOption.NOFOLLOW_LINKS));
+    assertTrue(isSameFile(existingPath, renamedPath));
+    assertThat(java.nio.file.Files.readAllLines(existingPath), is(expectedContent));
+  }
+
+  @Test
+  public void testRenameFileSymlinkToExistingDirectorySymlink() throws Exception {
+    assumeTrue("Skipped because symbolic links cannot be created in current environment", symlinksSupported);
+    Path existingPath = target.resolve("existingPath");
+    makeDirectorySymlink(existingPath);
+
+    try {
+      Path renamedPath = Files.rename(fileLink, existingPath, Duration.ZERO);
+      if (isWindows) {
+        fail("Expecting AccessDeniedException");
+      }
+      assertFalse(exists(fileLink, LinkOption.NOFOLLOW_LINKS));
+      assertTrue(exists(existingPath, LinkOption.NOFOLLOW_LINKS));
+      assertTrue(isSameFile(existingPath, renamedPath));
+    } catch (AccessDeniedException e) {
+      if (!isWindows) {
+        throw e;
+      }
+    }
+  }
+
+  @Test
+  public void testRenameDirectorySymlinkToExistingFile() throws Exception {
+    assumeTrue("Skipped because symbolic links cannot be created in current environment", symlinksSupported);
+    Path existingPath = target.resolve("existingPath");
+    makeFile(existingPath, singletonList("existingPath"));
+
+    Path renamedPath = Files.rename(dirLink, existingPath);
+    assertFalse(exists(dirLink, LinkOption.NOFOLLOW_LINKS));
+    assertTrue(exists(existingPath, LinkOption.NOFOLLOW_LINKS));
+    assertTrue(isSameFile(existingPath, renamedPath));
+  }
+
+  @Test
+  public void testRenameDirectorySymlinkToExistingDirectory() throws Exception {
+    assumeTrue("Skipped because symbolic links cannot be created in current environment", symlinksSupported);
+    Path existingPath = target.resolve("existingPath");
+    makeDirectory(existingPath);
+
+    try {
+      Files.rename(dirLink, existingPath, Duration.ZERO);
+      fail("Expecting " + (isWindows ? "AccessDeniedException" : "FileSystemException"));
+    } catch (AccessDeniedException e) {
+      if (!isWindows) {
+        throw e;
+      }
+    } catch (FileSystemException e) {
+      if (isWindows) {
+        throw e;
+      }
+      assertThat(e.getReason(), is("Is a directory"));
+    }
+  }
+
+  @Test
+  public void testRenameDirectorySymlinkToExistingFileSymlink() throws Exception {
+    assumeTrue("Skipped because symbolic links cannot be created in current environment", symlinksSupported);
+    Path existingPath = target.resolve("existingPath");
+    makeFileSymlink(existingPath, singletonList("existingPath"));
+
+    Path renamedPath = Files.rename(dirLink, existingPath);
+    assertFalse(exists(dirLink, LinkOption.NOFOLLOW_LINKS));
+    assertTrue(exists(existingPath, LinkOption.NOFOLLOW_LINKS));
+    assertTrue(isSameFile(existingPath, renamedPath));
+  }
+
+  @Test
+  public void testRenameDirectorySymlinkToExistingDirectorySymlink() throws Exception {
+    assumeTrue("Skipped because symbolic links cannot be created in current environment", symlinksSupported);
+    Path existingPath = target.resolve("existingPath");
+    makeDirectorySymlink(existingPath);
+
+    try {
+      Path renamedPath = Files.rename(dirLink, existingPath, Duration.ZERO);
+      if (isWindows) {
+        fail("Expecting AccessDeniedException");
+      }
+      assertFalse(exists(dirLink, LinkOption.NOFOLLOW_LINKS));
+      assertTrue(exists(existingPath, LinkOption.NOFOLLOW_LINKS));
+      assertTrue(isSameFile(existingPath, renamedPath));
+    } catch (AccessDeniedException e) {
+      if (!isWindows) {
+        throw e;
+      }
+    }
   }
 }
