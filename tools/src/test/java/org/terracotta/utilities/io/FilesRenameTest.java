@@ -137,7 +137,7 @@ public class FilesRenameTest extends FilesTestBase {
     try (PathHolder holder = new PathHolder(topFile, Duration.ofMillis(100))) {
       holder.start();
       Thread.currentThread().interrupt();
-      renamedPath = Files.rename(topFile, newName, holder.getHoldTime());
+      renamedPath = Files.rename(topFile, newName, holder.getHoldTime().multipliedBy(2));
       assertTrue(Thread.interrupted());
     }
     assertFalse(exists(topFile, LinkOption.NOFOLLOW_LINKS));

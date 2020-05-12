@@ -88,7 +88,7 @@ public class FilesDeleteTreeTest extends FilesTestBase {
   public void testFileDeleteTreeInTime() throws Exception {
     try (PathHolder holder = new PathHolder(topFile, Duration.ofMillis(100))) {
       holder.start();
-      Files.deleteTree(topFile, holder.getHoldTime());
+      Files.deleteTree(topFile, holder.getHoldTime().multipliedBy(2));
     }
     assertFalse(exists(topFile, LinkOption.NOFOLLOW_LINKS));
   }
