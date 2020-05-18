@@ -27,11 +27,15 @@ import java.lang.management.MonitorInfo;
 import java.lang.management.ThreadInfo;
 import java.lang.management.ThreadMXBean;
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
+import java.util.Collection;
 import java.util.Date;
 import java.util.List;
 import java.util.Objects;
+import java.util.OptionalLong;
 
 import javax.management.MBeanServer;
 
@@ -49,6 +53,64 @@ public final class Diagnostics {
    * Private niladic constructor to prevent instantiation.
    */
   private Diagnostics() {
+  }
+
+  /**
+   * Dumps the supplied threads in a thread-dump-like format.  Information about
+   * locked/blocked objects is only available when {@code useThreadInfo} is {@code true}.
+   * @param threads the threads to dump
+   * @param useThreadInfo if {@code true}, obtains a {@link ThreadMXBean} through
+   *                      which the {@link ThreadInfo} instance describing each
+   *                      {@code Thread} is obtained; the {@code ThreadInfo} instance,
+   *                      <i>if available</i>, is used for the dump; when {@code false},
+   *                      only the {@code Thread} content is used for the dump
+   * @param printStream the {@code PrintStream} to which the dump is written
+   */
+  public static void dumpThreads(Collection<Thread> threads, boolean useThreadInfo, PrintStream printStream) {
+    class ThreadPair {
+      final Thread thread;
+      final ThreadInfo threadInfo;
+
+      public ThreadPair(Thread thread, ThreadInfo threadInfo) {
+        this.thread = thread;
+        this.threadInfo = threadInfo;
+      }
+
+      public ThreadPair(Thread thread) {
+        this(thread, null);
+      }
+    }
+
+    List<ThreadPair> threadPairs = new ArrayList<>();
+    if (useThreadInfo) {
+      /*
+       * The return from ThreadMXBean.getThreadInfo can have "holes" -- if a Thread is already
+       * terminated, its slot in the returned array is null.
+       */
+      List<Thread> threadList = new ArrayList<>(threads);
+      long[] threadIds = threadList.stream().mapToLong(Thread::getId).toArray();
+      ThreadMXBean threadMXBean = ManagementFactory.getThreadMXBean();
+      ThreadInfo[] threadInfos = threadMXBean.getThreadInfo(threadIds, true, true);
+      for (int i = 0; i < threadList.size(); i++) {
+        threadPairs.add(new ThreadPair(threadList.get(i), threadInfos[i]));
+      }
+    } else {
+      threads.stream().map(ThreadPair::new).forEach(threadPairs::add);
+    }
+
+    for (ThreadPair p : threadPairs) {
+      if (p.threadInfo == null) {
+        Thread t = p.thread;
+        printStream.format("\"%s\" Id=%d prio=%d %s%n",
+            t.getName(), t.getId(), t.getPriority(), t.getState());
+        for (StackTraceElement element : t.getStackTrace()) {
+          printStream.format("\tat %s%n", element);
+        }
+        printStream.println();
+      } else {
+        printStream.print(format(p.threadInfo));
+      }
+    }
   }
 
   /**
@@ -127,9 +189,6 @@ public final class Diagnostics {
               sb.append('\n');
               break;
             case WAITING:
-              sb.append("\t- waiting on ").append(threadInfo.getLockInfo());
-              sb.append('\n');
-              break;
             case TIMED_WAITING:
               sb.append("\t- waiting on ").append(threadInfo.getLockInfo());
               sb.append('\n');
@@ -164,7 +223,7 @@ public final class Diagnostics {
   /**
    * Take a Java heap dump into a file whose name is produced from the template
    * <code>{@value #HEAP_DUMP_FILENAME_TEMPLATE}</code> where {@code 1$} is the PID of
-   * the current process obtained from {@link #getPid()}.
+   * the current process obtained from {@link #getLongPid()}.
    *
    * @param dumpLiveObjects if {@code true}, only "live" (reachable) objects are dumped;
    *                        if {@code false}, all objects in the heap are dumped
@@ -174,7 +233,7 @@ public final class Diagnostics {
   public static String dumpHeap(final boolean dumpLiveObjects) {
 
     String dumpName;
-    final int pid = getPid();
+    long pid = getLongPid();
     final Date currentTime = new Date();
     if (pid > 0) {
       dumpName = String.format(HEAP_DUMP_FILENAME_TEMPLATE, pid, currentTime);
@@ -226,19 +285,32 @@ public final class Diagnostics {
   }
 
   /**
-   * Gets the PID of the current process.  This method is dependent upon "common"
+   * Gets the PID of the current process.
+   * For Java 9+, this method returns the value obtained from {@code ProcessHandle.pid()};
+   * for Java 8-, this method is dependent upon "common"
+   * operation of the {@code java.lang.management.RuntimeMXBean#getName()} method.
+   *
+   * @return the PID of the current process or {@code -1} if the PID can not be determined
+   *
+   * @deprecated Use {@link #getLongPid()}; the PID returned by the Java 9+
+   *    {@code ProcessHandle.pid()} method is a {@code long}.  This method
+   *    returns the {@code long} value cast to an {@code int}.
+   */
+  @Deprecated
+  public static int getPid() {
+    return (int)Pid.PID.orElse(-1);
+  }
+
+  /**
+   * Gets the PID of the current process.
+   * For Java 9+, this method returns the value obtained from {@code ProcessHandle.pid()};
+   * for Java 8-, this method is dependent upon "common"
    * operation of the {@code java.lang.management.RuntimeMXBean#getName()} method.
    *
    * @return the PID of the current process or {@code -1} if the PID can not be determined
    */
-  public static int getPid() {
-    // Expected to be of the form "<pid>@<hostname>"
-    final String jvmProcessName = ManagementFactory.getRuntimeMXBean().getName();
-    try {
-      return Integer.parseInt(jvmProcessName.substring(0, jvmProcessName.indexOf('@')));
-    } catch (NumberFormatException | IndexOutOfBoundsException e) {
-      return -1;
-    }
+  public static long getLongPid() {
+    return Pid.PID.orElse(-1);
   }
 
   /**
@@ -315,6 +387,35 @@ public final class Diagnostics {
    */
   public static MaxDirectMemoryInfo getMaxDirectMemoryInfo() {
     return MaxDirectMemoryInfoHelper.INSTANCE;
+  }
+
+  /**
+   * Determines the process identifier of the current process.
+   */
+  private static final class Pid {
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    private static final OptionalLong PID = getPidInternal();
+
+    private static OptionalLong getPidInternal() {
+      Long pid = null;
+      try {
+        // Use Java 9+ ProcessHandle.current().pid() if available
+        Class<?> processHandleClass = Class.forName("java.lang.ProcessHandle");
+        Method currentMethod = processHandleClass.getMethod("current");
+        Method getPidMethod = processHandleClass.getMethod("pid");
+        pid = (Long)getPidMethod.invoke(currentMethod.invoke(null));
+
+      } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException | ClassNotFoundException e) {
+        // Expected to be of the form "<pid>@<hostname>"
+        String jvmProcessName = ManagementFactory.getRuntimeMXBean().getName();
+        try {
+          pid = Long.parseLong(jvmProcessName.substring(0, jvmProcessName.indexOf('@')));
+
+        } catch (NumberFormatException | IndexOutOfBoundsException ignored) {
+        }
+      }
+      return (pid == null ? OptionalLong.empty() : OptionalLong.of(pid));
+    }
   }
 
   /**
