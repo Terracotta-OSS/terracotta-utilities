@@ -15,13 +15,18 @@
  */
 package org.terracotta.utilities.test.net;
 
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
 import java.lang.ref.Reference;
 import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.net.BindException;
 import java.net.ConnectException;
 import java.net.InetAddress;
@@ -38,10 +43,13 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.IntUnaryOperator;
 
+import static java.lang.Integer.toHexString;
+import static java.lang.System.identityHashCode;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -63,12 +71,16 @@ public class PortManager {
   private static final Logger LOGGER = LoggerFactory.getLogger(PortManager.class);
 
   private static final PortManager INSTANCE = new PortManager();
+  static {
+    emitInstanceNotification("Instantiated");
+  }
 
   /**
    * Gets the singleton instance of {@code PortManager} to use in a JVM.
    * @return the singleton {@code PortManager} instance
    */
   public static PortManager getInstance() {
+    emitInstanceNotification("Using");
     return INSTANCE;
   }
 
@@ -284,7 +296,7 @@ public class PortManager {
     while ((reference = dereferencedPorts.poll()) != null) {
       if (reference instanceof AllocatedPort) {
         AllocatedPort allocatedPort = (AllocatedPort)reference;
-        LOGGER.trace("Port {} dereferenced; releasing reservation", allocatedPort.port);
+        LOGGER.info("Port {} dereferenced; releasing reservation", allocatedPort.port);
         allocatedPort.release();
       } else {
         LOGGER.warn("Unexpected Reference observed: {}", reference);
@@ -330,7 +342,13 @@ public class PortManager {
        */
       if (systemLevelLockHeld) {
         if (refusesConnect(candidatePort)) {
-          LOGGER.debug("Reserved port {}", candidatePort);
+          ClassLoader classLoader = this.getClass().getClassLoader();
+          LOGGER.info("Port {} reserved (JVM-level) by {}@{} ({}@{})",
+              candidatePort,
+              this.getClass().getSimpleName(),
+              toHexString(identityHashCode(this)),
+              classLoader.getClass().getSimpleName(),
+              toHexString(identityHashCode(classLoader)));
           releaseRequired = false;   // Vetting successful; don't close PortRef on exit
           return portRef;
         } else {
@@ -368,7 +386,7 @@ public class PortManager {
   private synchronized void release(int port) {
     portMap.clear(port);
     allocatedPorts.remove(port);
-    LOGGER.trace("Released JVM-level reservation for port {}", port);
+    LOGGER.info("Port {} released (JVM-level)", port);
   }
 
   /**
@@ -415,6 +433,48 @@ public class PortManager {
     return isFree;
   }
 
+  @SuppressFBWarnings("DE_MIGHT_IGNORE")
+  private static void emitInstanceNotification(String use) {
+    try {
+      ClassLoader classLoader = INSTANCE.getClass().getClassLoader();
+      LOGGER.info("PID {}: {} PortManager instance: {}@{} ({}@{})",
+          Pid.PID.orElse(-1), use,
+          INSTANCE.getClass().getName(),
+          toHexString(identityHashCode(INSTANCE)),
+          classLoader.getClass().getName(),
+          toHexString(identityHashCode(classLoader)));
+    } catch (Exception ignored) {
+    }
+  }
+
+  /**
+   * Determines the process identifier of the current process.
+   */
+  private static final class Pid {
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    private static final OptionalLong PID = getPidInternal();
+
+    private static OptionalLong getPidInternal() {
+      Long pid = null;
+      try {
+        // Use Java 9+ ProcessHandle.current().pid() if available
+        Class<?> processHandleClass = Class.forName("java.lang.ProcessHandle");
+        Method currentMethod = processHandleClass.getMethod("current");
+        Method getPidMethod = processHandleClass.getMethod("pid");
+        pid = (Long)getPidMethod.invoke(currentMethod.invoke(null));
+
+      } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException | ClassNotFoundException e) {
+        // Expected to be of the form "<pid>@<hostname>"
+        String jvmProcessName = ManagementFactory.getRuntimeMXBean().getName();
+        try {
+          pid = Long.parseLong(jvmProcessName.substring(0, jvmProcessName.indexOf('@')));
+
+        } catch (NumberFormatException | IndexOutOfBoundsException ignored) {
+        }
+      }
+      return (pid == null ? OptionalLong.empty() : OptionalLong.of(pid));
+    }
+  }
 
   /**
    * {@code Reference} implementation used to track no longer used reserved ports.
