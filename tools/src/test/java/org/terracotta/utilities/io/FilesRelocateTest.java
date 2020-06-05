@@ -17,39 +17,35 @@ package org.terracotta.utilities.io;
 
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 
-import org.junit.Before;
 import org.junit.Test;
 
 import java.io.IOException;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Iterator;
 import java.util.List;
 import java.util.stream.Collectors;
 
-import static java.nio.file.Files.createDirectory;
 import static java.nio.file.Files.createFile;
 import static java.nio.file.Files.exists;
 import static java.nio.file.Files.isSameFile;
+import static org.hamcrest.Matchers.is;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.junit.Assume.assumeTrue;
 
 /**
  * Tests the {@link Files} {@code relocate} method.
+ * @see FilesRelocateFileTest
+ * @see FilesRelocateFileTest
  */
-public class FilesRelocateTest extends FilesTestBase {
+public class FilesRelocateTest extends FilesRelocateTestBase {
   // Files.relocate is a combination of Files.deleteTree and Files.copy each of which is
   // covered in some detail.  This class will focus on behaviors unique to Files.relocate.
-
-  private Path target;
-
-  @Before
-  public void prepareTarget() throws IOException {
-    target = createDirectory(root.resolve("target_" + testName.getMethodName()));  // root/target
-  }
 
   @Test
   public void testNullPathOrigin() throws Exception {
@@ -78,6 +74,32 @@ public class FilesRelocateTest extends FilesTestBase {
       fail("Expecting NoSuchFileException");
     } catch (NoSuchFileException e) {
       // expected
+    }
+  }
+
+  /**
+   * This test ensures that relative path targets are handled properly.
+   */
+  @Test
+  public void testRelativeTarget() throws Exception {
+    Path userDir = Paths.get(System.getProperty("user.dir"));
+    Path tempDir = java.nio.file.Files.createTempDirectory(
+        Paths.get(""), "delete_me-" + testName.getMethodName() + "-");
+    Path targetDir = tempDir.resolve(top.getFileName());
+    try {
+      assertTrue(exists(tempDir));
+      assertFalse(tempDir.isAbsolute());
+      Path resolvedDir = userDir.resolve(tempDir);
+      assertTrue(resolvedDir.isAbsolute());
+      assertTrue(isSameFile(tempDir, resolvedDir));
+      assertThat(userDir.relativize(resolvedDir), is(tempDir));
+
+      Path relocatedPath = Files.relocate(top, targetDir);
+      assertFalse(exists(top, LinkOption.NOFOLLOW_LINKS));
+      assertTrue(exists(userDir.resolve(targetDir)));
+      assertTrue(isSameFile(relocatedPath, resolvedDir.resolve(top.getFileName())));
+    } finally {
+      Files.deleteTree(tempDir);
     }
   }
 

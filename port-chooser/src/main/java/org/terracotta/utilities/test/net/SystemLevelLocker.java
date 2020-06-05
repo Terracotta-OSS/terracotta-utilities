@@ -92,7 +92,7 @@ class SystemLevelLocker {
     int port = requireNonNull(portRef, "portRef").port();
     try {
       if (openChannel == null) {
-        LOGGER.trace("Opening system-level port lock file {}", lockFilePath);
+        LOGGER.info("Opening system-level port lock file {}", lockFilePath);
         openChannel = FileChannel.open(lockFilePath, StandardOpenOption.WRITE, StandardOpenOption.READ);
       }
 
@@ -100,7 +100,7 @@ class SystemLevelLocker {
       if (fileLock != null) {
         outstandingLocks++;
         portRef.onClose(() -> release(port, fileLock));
-        LOGGER.trace("System-level reservation obtained for port {}", port);
+        LOGGER.info("Port {} reserved (system-level)", port);
         return true;
       } else {
         // Locked by another process
@@ -127,8 +127,9 @@ class SystemLevelLocker {
 
     try {
       lock.release();
-      LOGGER.trace("Released system-level reservation for port {}", port);
+      LOGGER.info("Port {} released (system-level)", port);
     } catch (ClosedChannelException ignored) {
+      LOGGER.info("Port {} already released (system-level): channel closed", port);
     } catch (IOException e) {
       LOGGER.warn(String.format("Error while releasing lock against \"%s\" for port %s",
           lockFilePath, port), e);
@@ -144,7 +145,7 @@ class SystemLevelLocker {
   private void closeChannelIfUnused() {
     if (openChannel != null && outstandingLocks == 0) {
       try {
-        LOGGER.trace("Closing system-level port lock file {}", lockFilePath);
+        LOGGER.info("Closing system-level port lock file {}", lockFilePath);
         openChannel.close();
       } catch (IOException e) {
         LOGGER.warn(String.format("Failed to close \"%s\"", lockFilePath), e);
