@@ -137,7 +137,7 @@ if exist %WRAPPER_JAR% (
         SET DOWNLOAD_URL="%MVNW_REPOURL%/io/takari/maven-wrapper/0.5.6/maven-wrapper-0.5.6.jar"
     )
 
-    dir /s .mvn
+    dir /S "%MAVEN_PROJECTBASEDIR%\.mvn"
     if "%MVNW_VERBOSE%" == "true" (
         echo Couldn't find %WRAPPER_JAR%, downloading it ...
         echo Downloading from: %DOWNLOAD_URL%
@@ -153,7 +153,7 @@ if exist %WRAPPER_JAR% (
     if "%MVNW_VERBOSE%" == "true" (
         echo Finished downloading %WRAPPER_JAR%
     )
-    dir /s .mvn
+    dir /s "%MAVEN_PROJECTBASEDIR%\.mvn"
 )
 @REM End of extension
 
