@@ -20,6 +20,8 @@ import org.junit.ClassRule;
 import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.ExpectedException;
+import org.junit.rules.TestName;
 import org.junit.runner.JUnitCore;
 import org.junit.runner.Result;
 import org.junit.runners.JUnit4;
@@ -32,10 +34,39 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 import static org.junit.internal.matchers.ThrowableMessageMatcher.hasMessage;
+import static org.terracotta.utilities.test.rules.TestRetryer.OutputIs.CLASS_RULE;
+import static org.terracotta.utilities.test.rules.TestRetryer.OutputIs.RULE;
 
 public class TestRetryerTest {
 
-  @Test @SuppressWarnings("unchecked")
+  @Test
+  public void testValuesMapCorrectly() throws InitializationError {
+    Result result = new JUnitCore().run(new JUnit4(MappedSuccess.class));
+
+    assertTrue(result.wasSuccessful());
+    assertThat(result.getFailureCount(), is(0));
+    assertThat(result.getRunCount(), is(4));
+  }
+
+  @Test
+  public void testRuleIsRunCorrectly() throws InitializationError {
+    Result result = new JUnitCore().run(new JUnit4(TestWithRule.class));
+
+    assertTrue(result.wasSuccessful());
+    assertThat(result.getFailureCount(), is(0));
+    assertThat(result.getRunCount(), is(2));
+  }
+
+  @Test
+  public void testClassRuleIsRunCorrectly() throws InitializationError {
+    Result result = new JUnitCore().run(new JUnit4(TestWithClassRule.class));
+
+    assertTrue(result.wasSuccessful());
+    assertThat(result.getFailureCount(), is(0));
+    assertThat(result.getRunCount(), is(1));
+  }
+
+  @Test
   public void testExceptionsSuppressProperly() throws InitializationError {
     Result result = new JUnitCore().run(new JUnit4(RepeatedFailure.class));
 
@@ -104,6 +135,69 @@ public class TestRetryerTest {
     assertTrue(result.wasSuccessful());
     assertThat(result.getFailureCount(), is(0));
     assertThat(result.getRunCount(), is(6));
+  }
+
+  @Test
+  public void testMultipleRetryers() throws InitializationError {
+    Result result = new JUnitCore().run(new JUnit4(MultipleRetryerEventuallyPassingTest.class));
+
+    assertTrue(result.wasSuccessful());
+    assertThat(result.getFailureCount(), is(0));
+    assertThat(result.getRunCount(), is(16));
+  }
+
+  @Test
+  public void testNestedRetryers() throws InitializationError {
+    Result result = new JUnitCore().run(new JUnit4(NestedRetryerEventuallyPassingTest.class));
+
+    assertTrue(result.wasSuccessful());
+    assertThat(result.getFailureCount(), is(0));
+    assertThat(result.getRunCount(), is(16));
+  }
+
+  @Ignore
+  public static class MappedSuccess {
+
+    @ClassRule @Rule
+    public static TestRetryer<Integer, String> RETRYER = TestRetryer.tryValues(1, 2, 3, 4).map(Integer::toBinaryString);
+
+    @Test
+    public void test() {
+      Assert.assertThat(RETRYER.get(), is("100"));
+    }
+  }
+
+  @Ignore
+  public static class TestWithRule {
+
+    @ClassRule @Rule
+    public static TestRetryer<Integer, TestName> RETRYER = TestRetryer.tryValues(1, 2, 3, 4).map(i -> new TestName()).outputIs(RULE);
+
+    @Test
+    public void foo() {
+      Assert.assertThat(RETRYER.get().getMethodName(), is("foo"));
+    }
+
+    @Test
+    public void bar() {
+      Assert.assertThat(RETRYER.get().getMethodName(), is("bar"));
+    }
+  }
+
+  @Ignore
+  public static class TestWithClassRule {
+
+    @ClassRule @Rule
+    public static TestRetryer<Integer, ExpectedException> RETRYER = TestRetryer.tryValues(1, 2, 3, 4).map(i -> {
+      ExpectedException expectedException = ExpectedException.none();
+      expectedException.expectMessage(Integer.toString(i));
+      return expectedException;
+    }).outputIs(CLASS_RULE);
+
+    @Test
+    public void test() {
+      Assert.fail(Integer.toString(RETRYER.input()));
+    }
   }
 
   @Ignore
@@ -186,6 +280,36 @@ public class TestRetryerTest {
     @Test
     public void failingTest() {
       assertThat(RETRYER.get(), is(3));
+    }
+  }
+
+  @Ignore
+  public static class MultipleRetryerEventuallyPassingTest {
+
+    @ClassRule @Rule
+    public static TestRetryer<Integer, Integer> RETRYER_A = TestRetryer.tryValues(1, 2, 3, 4);
+
+    @ClassRule @Rule
+    public static TestRetryer<Integer, Integer> RETRYER_B = TestRetryer.tryValues(1, 2, 3, 4);
+
+    @Test
+    public void test() {
+      assertThat("A", RETRYER_A.get(), is(4));
+      assertThat("B", RETRYER_B.get(), is(4));
+    }
+  }
+
+  @Ignore
+  public static class NestedRetryerEventuallyPassingTest {
+
+    @ClassRule @Rule
+    public static TestRetryer<Integer, TestRetryer<Integer, Integer>> RETRYER_A = TestRetryer.tryValues(1, 2, 3, 4).map(i -> TestRetryer.tryValues(1, 2, 3, 4).map(j -> i * j)).outputIs(CLASS_RULE, RULE);
+
+    @Test
+    public void test() {
+      assertThat("A input", RETRYER_A.input(), is(4));
+      assertThat("B input", RETRYER_A.get().input(), is(4));
+      assertThat("B", RETRYER_A.get().get(), is(16));
     }
   }
 }
