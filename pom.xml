@@ -42,7 +42,7 @@
     <logback.version>1.2.3</logback.version>
     <hamcrest.version>2.2</hamcrest.version>
     <mokito.version>3.3.3</mokito.version>
-    <junit.version>4.12</junit.version>
+    <junit.version>4.13.1</junit.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     <terracotta-os-snapshots-url>http://nexus.terracotta.eur.ad.sag/content/repositories/terracotta-os-snapshots</terracotta-os-snapshots-url>
