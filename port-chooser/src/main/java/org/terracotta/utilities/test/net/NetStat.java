@@ -30,7 +30,6 @@ import java.text.CharacterIterator;
 import java.text.StringCharacterIterator;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -41,6 +40,7 @@ import java.util.stream.Stream;
 
 import static java.util.Objects.*;
 import static java.util.stream.Collectors.toList;
+import static java.util.stream.Collectors.toMap;
 
 /**
  * Produces a network status collection similar to that obtained using {@code netstat}.
@@ -90,7 +90,6 @@ public class NetStat {
     try {
       return Platform.getPlatform().netstat();
     } catch (Exception e) {
-      LOGGER.error("Failed to obtain TCP port information", e);
       throw new RuntimeException(e);
     }
   }
@@ -128,29 +127,7 @@ public class NetStat {
       public List<BusyPort> netstat() throws HostExecutionException {
         Function<Stream<String>, List<BusyPort>> conversion =
             stream -> stream.skip(1).map(NetStat::parseWindowsCsv).collect(toList());
-        String[] command = {
-            "powershell.exe",
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "&{$ErrorActionPreference = 'Stop'; " +
-                " $processes = Get-WmiObject -Class \"Win32_Process\" -Namespace \"ROOT\\CIMV2\" " +
-                "| Select-Object -Property ProcessId, Caption, CommandLine; " +
-                " Get-NetTCPConnection " +
-                "| Select-Object -Property OwningProcess, LocalAddress, LocalPort, RemoteAddress, RemotePort, State " +
-                "| Foreach-Object {" +
-                "  $connection = $_;" +
-                "  $process = $processes | Where-Object {$_.ProcessId -eq $connection.OwningProcess} | Select-Object -Unique;" +
-                "  if ($process -ne $null) {" +
-                "    $connection | Add-Member -NotePropertyMembers @{ProcessCaption = $process.Caption; ProcessCommandLine = $process.CommandLine}" +
-                "  };" +
-                "  $connection;" +
-                "}" +
-                "| ConvertTo-Csv -NoTypeInformation" +
-                "}"
-        };
-        return runCommand(command, conversion);
+        return runCommand(POWERSHELL_NETSTAT_COMMAND, conversion);
       }
     },
 
@@ -163,16 +140,7 @@ public class NetStat {
     MAC("mac") {
       @Override
       public List<BusyPort> netstat() throws HostExecutionException {
-        String[] nettop = {
-            "nettop",
-            "-L1",
-            "-m",
-            "tcp",
-            "-n",
-            "-J",
-            "state"
-        };
-        List<BusyPort> busyPorts = runCommand(nettop, NetStat::parseNetTop);
+        List<BusyPort> busyPorts = runCommand(NETTOP_COMMAND, NetStat::parseNetTop);
 
         /*
          * Since the 'nettop' command doesn't provide a useful command string, 'ps' is used to
@@ -191,26 +159,11 @@ public class NetStat {
     LINUX("linux") {
       @Override
       public List<BusyPort> netstat() throws HostExecutionException {
-        Function<Stream<String>, List<BusyPort>> conversion = NetStat::parseLsof;
-        String[] sudo = {
-            "sudo",       // The use of 'sudo' is required to obtain a list of open file descriptors for processes not owned by the current user.
-            "--non-interactive",
-            "--"
-        };
-        String[] lsof = {
-            "lsof",
-            "-nP",
-            "-iTCP",
-            "-F",
-            "0pPRgLnTtc",
-            "+c0",
-            "-w"          // Suppress warnings
-        };
-        String[] sudoLsof = Arrays.copyOf(sudo, sudo.length + lsof.length);
-        System.arraycopy(lsof, 0, sudoLsof, sudo.length, lsof.length);
+        String[] sudoLsof = Arrays.copyOf(SUDO_PREFIX, SUDO_PREFIX.length + LSOF_COMMAND.length);
+        System.arraycopy(LSOF_COMMAND, 0, sudoLsof, SUDO_PREFIX.length, LSOF_COMMAND.length);
         List<BusyPort> busyPorts;
         try {
-          busyPorts = runCommand(sudoLsof, conversion);
+          busyPorts = runCommand(sudoLsof, NetStat::parseLsof);
         } catch (HostExecutionException e) {
           String message = "\n" +
               "\n********************************************************************************" +
@@ -224,7 +177,7 @@ public class NetStat {
               "\n";
           LOGGER.warn(message, e);
           try {
-            busyPorts = runCommand(lsof, conversion);
+            busyPorts = runCommand(LSOF_COMMAND, NetStat::parseLsof);
           } catch (Exception ex) {
             HostExecutionException hostExecutionException =
                 new HostExecutionException("Failed to obtain active TCP ports using 'lsof'" + message, ex);
@@ -282,20 +235,16 @@ public class NetStat {
      * @throws HostExecutionException if an error is raised trying to run the {@code ps} command
      */
     private static List<BusyPort> mergeCommands(List<BusyPort> busyPorts) throws HostExecutionException {
-      String[] ps = { "ps", "-ax", "-opid,user,command" };
-      return runCommand(ps, psStream -> {
-        Pattern psLine = Pattern.compile("\\s*(\\S+)\\s(\\S+)\\s+(.+)");
-        Map<Long, String> processMap = new HashMap<>();
-        Iterator<String> iterator = psStream.skip(1).iterator();
-        while (iterator.hasNext()) {
-          String line = iterator.next();
-          Matcher matcher = psLine.matcher(line);
-          if (matcher.matches()) {
-            processMap.put(Long.parseLong(matcher.group(1)), matcher.group(3));
-          } else {
-            throw new IllegalStateException("Failed to process process line - '" + line + "'");
-          }
-        }
+      return runCommand(PS_COMMAND, psStream -> {
+        Map<Long, String> processMap = psStream.skip(1)
+            .map(line -> {
+              Matcher matcher = PS_PATTERN.matcher(line);
+              if (!matcher.matches()) {
+                throw new IllegalStateException("Failed to process process line - '" + line + "'");
+              }
+              return matcher;
+            })
+            .collect(toMap(m -> Long.parseLong(m.group(1)), m -> m.group(3)));
 
         return busyPorts.stream()
             .map(p -> {
@@ -305,6 +254,8 @@ public class NetStat {
             .collect(toList());
       });
     }
+    private static final String[] PS_COMMAND = new String[] { "ps", "-ax", "-opid,user,command" };
+    private static final Pattern PS_PATTERN = Pattern.compile("\\s*(\\S+)\\s(\\S+)\\s+(.+)");
 
     private static <T> List<T> runCommand(String[] command, Function<Stream<String>, List<T>> conversion)
         throws HostExecutionException {
@@ -330,7 +281,7 @@ public class NetStat {
   }
 
   /**
-   * Parses a response line from the {@link Platform#WINDOWS WINDOWS} {@code netstat} command-equivalent.
+   * Parses a response line from {@link #POWERSHELL_NETSTAT_COMMAND}.
    * @param line a comma-separated-value line containing:
    *             <ul>
    *             <li>OwningProcess</li>
@@ -405,10 +356,32 @@ public class NetStat {
 
     return builder.build();
   }
+  private static final String[] POWERSHELL_NETSTAT_COMMAND = new String[] {
+      "powershell.exe",
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "&{$ErrorActionPreference = 'Stop'; " +
+          " $processes = Get-WmiObject -Class \"Win32_Process\" -Namespace \"ROOT\\CIMV2\" " +
+          "| Select-Object -Property ProcessId, Caption, CommandLine; " +
+          " Get-NetTCPConnection " +
+          "| Select-Object -Property OwningProcess, LocalAddress, LocalPort, RemoteAddress, RemotePort, State " +
+          "| Foreach-Object {" +
+          "  $connection = $_;" +
+          "  $process = $processes | Where-Object {$_.ProcessId -eq $connection.OwningProcess} | Select-Object -Unique;" +
+          "  if ($process -ne $null) {" +
+          "    $connection | Add-Member -NotePropertyMembers @{ProcessCaption = $process.Caption; ProcessCommandLine = $process.CommandLine}" +
+          "  };" +
+          "  $connection;" +
+          "}" +
+          "| ConvertTo-Csv -NoTypeInformation" +
+          "}"
+  };
 
 
   /**
-   * Parses the output of an {@code lsof} command using the arguments {@code -nP -iTCP -F '0pPRgLnTtc' +c 0}.
+   * Parses the output of {@link #LSOF_COMMAND}.
    * <p>
    * The {@code F} options are:
    * <dl>
@@ -552,6 +525,20 @@ public class NetStat {
 
     return busyPorts;
   }
+  private static final String[] SUDO_PREFIX = new String[] {
+      "sudo",       // The use of 'sudo' is required to obtain a list of open file descriptors for processes not owned by the current user.
+      "--non-interactive",
+      "--"
+  };
+  private static final String[] LSOF_COMMAND = new String[] {
+      "lsof",
+      "-nP",          // Use numeric IP addresses; use numeric ports
+      "-iTCP",        // Match only TCP connections
+      "-F",           // Field list ...
+      "0pPRgLnTtc",   // ... see 'parseLsof' for description
+      "+c0",          // Use expanded COMMAND value
+      "-w"            // Suppress warnings
+  };
 
   /**
    * Converts the TCP endpoint address pair obtained from the "name" field output from {@code lsof} into
@@ -599,7 +586,7 @@ public class NetStat {
   }
 
   /**
-   * Parses the output of a {@code nettop} command using the arguments {@code -L1 -m tcp -n -J state}.
+   * Parses the output of {@link #NETTOP_COMMAND}.
    * <p>
    * The output begins with a header line which is dropped by this method.
    * The remaining output is grouped:
@@ -703,6 +690,15 @@ public class NetStat {
 
     return busyPorts;
   }
+  private static final String[] NETTOP_COMMAND = new String[] {
+      "nettop",
+      "-L1",            // Take only one (1) sample
+      "-m",             // Monitor only ...
+      "tcp",            // ... TCP sockets
+      "-n",             // Use numeric IP addresses
+      "-J",             // Include fields ...
+      "state"           // ... 'state'
+  };
 
   private static void processNettopEndpoints(BusyPort.IPVersion ipVersion, BusyPort.Builder builder, String line,
                                              Pattern endpointPattern, Function<String, String> endpointHostMapper) {

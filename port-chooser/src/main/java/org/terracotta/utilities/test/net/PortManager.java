@@ -492,9 +492,11 @@ public class PortManager {
           .filter(p -> p.localEndpoint().getPort() == port)
           .collect(toList());
       if (!collisions.isEmpty()) {
-        LOGGER.error("Port {} being released to PortManager is in use by the following:{}",
-            port, collisions.stream().map(NetStat.BusyPort::toString)
-                .collect(joining("\n    ", "\n    ", "")));
+        LOGGER.error("Port {} being released to PortManager is in use by the following:\n{}",
+            port, collisions.stream()
+                .map(NetStat.BusyPort::toString)
+                .map(s -> "    " + s)
+                .collect(joining("\n")));
       }
     } catch (RuntimeException e) {
       LOGGER.warn("Unable to obtain busy port information to verify release of port {}", port, e);
