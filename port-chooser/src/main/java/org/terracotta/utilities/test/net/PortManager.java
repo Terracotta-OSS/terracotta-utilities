@@ -52,6 +52,8 @@ import java.util.function.IntUnaryOperator;
 import static java.lang.Integer.toHexString;
 import static java.lang.System.identityHashCode;
 import static java.util.Objects.requireNonNull;
+import static java.util.stream.Collectors.joining;
+import static java.util.stream.Collectors.toList;
 
 /**
  * Manages TCP port reservation/de-reservation while attempting to avoid
@@ -394,6 +396,7 @@ public class PortManager {
               classLoader.getClass().getSimpleName(),
               toHexString(identityHashCode(classLoader)));
           releaseRequired = false;   // Vetting successful; don't close PortRef on exit
+          portRef.onClose(() -> diagnosticReleaseCheck(candidatePort));
           return portRef;
         } else {
           LOGGER.trace("Port {} failed refusesConnect", candidatePort);
@@ -477,6 +480,26 @@ public class PortManager {
     return isFree;
   }
 
+  /**
+   * Checks that the port being released is actually free and emits a detailed log message
+   * if not.
+   * @param port the port to check
+   */
+  private void diagnosticReleaseCheck(int port) {
+    try {
+      List<NetStat.BusyPort> collisions = NetStat.info().stream()
+          .filter(p -> p.localEndpoint().getPort() == port)
+          .collect(toList());
+      if (!collisions.isEmpty()) {
+        LOGGER.error("Port {} being released to PortManager is in use by the following:{}",
+            port, collisions.stream().map(NetStat.BusyPort::toString)
+                .collect(joining("\n    ", "\n    ", "")));
+      }
+    } catch (RuntimeException e) {
+      LOGGER.warn("Unable to obtain busy port information to verify release of port {}", port, e);
+    }
+  }
+
   @SuppressFBWarnings("DE_MIGHT_IGNORE")
   private static void emitInstanceNotification(String use) {
     try {
@@ -555,7 +578,9 @@ public class PortManager {
 
     /**
      * Prepends a close action to this {@code PortRef}.  Actions are executed
-     * in reverse order of their addition.
+     * in reverse order of their addition.  The {@code Runnable} supplied as
+     * {@code action} <b>must not</b> contain a reference to the {@code PortRef}
+     * instance itself.
      * @param action the action to take to close this {@code PortRef} instance
      */
     void onClose(Runnable action) {
