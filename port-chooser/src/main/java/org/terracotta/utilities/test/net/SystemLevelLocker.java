@@ -99,7 +99,10 @@ class SystemLevelLocker {
       FileLock fileLock = openChannel.tryLock(port, 1, false);
       if (fileLock != null) {
         outstandingLocks++;
-        portRef.onClose(() -> release(port, fileLock));
+        portRef.onClose(p -> {
+          assert p == port;
+          release(p, fileLock);
+        });
         LOGGER.info("Port {} reserved (system-level)", port);
         return true;
       } else {

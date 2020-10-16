@@ -240,7 +240,7 @@ public class PortManagerTest {
        * the port is first marked closed then the onClose actions are executed.
        */
       AtomicReference<Optional<PortManager.PortRef>> altPortRef = new AtomicReference<>();
-      portRef.onClose(() -> altPortRef.set(portManager.getPortRef(port)));
+      portRef.onClose(p -> altPortRef.set(portManager.getPortRef(p)));
 
       assertThat(portManager.getPortRef(port).orElseThrow(AssertionError::new), is(sameInstance(portRef)));
 

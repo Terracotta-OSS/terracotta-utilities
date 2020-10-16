@@ -47,6 +47,7 @@ import java.util.OptionalLong;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.IntConsumer;
 import java.util.function.IntUnaryOperator;
 
 import static java.lang.Integer.toHexString;
@@ -372,7 +373,7 @@ public class PortManager {
       // 1) Mark the port reserved in presumption the vetting will succeed
       portMap.set(candidatePort);
       allocatedPorts.put(portRef.port, new AllocatedPort(portRef, dereferencedPorts));
-      portRef.onClose(() -> release(candidatePort));
+      portRef.onClose(this::release);
 
       // 2) Create a server Socket for the candidate port
       boolean systemLevelLockHeld;
@@ -396,7 +397,7 @@ public class PortManager {
               classLoader.getClass().getSimpleName(),
               toHexString(identityHashCode(classLoader)));
           releaseRequired = false;   // Vetting successful; don't close PortRef on exit
-          portRef.onClose(() -> diagnosticReleaseCheck(candidatePort));
+          portRef.onClose(this::diagnosticReleaseCheck);
           return portRef;
         } else {
           LOGGER.trace("Port {} failed refusesConnect", candidatePort);
@@ -548,7 +549,7 @@ public class PortManager {
    */
   private static class AllocatedPort extends WeakReference<PortRef> {
     private final int port;
-    private final AtomicReference<Runnable> closer;
+    private final AtomicReference<IntConsumer> closer;
     private AllocatedPort(PortRef referent, ReferenceQueue<? super PortRef> q) {
       super(referent, q);
       this.port = referent.port();
@@ -557,7 +558,7 @@ public class PortManager {
 
     private void release() {
       try {
-        Optional.ofNullable(this.closer.get()).ifPresent(Runnable::run);
+        Optional.ofNullable(this.closer.get()).ifPresent(action -> action.accept(port));
       } catch (Exception ignored) {
       }
     }
@@ -569,7 +570,7 @@ public class PortManager {
    */
   public static class PortRef implements AutoCloseable {
     private final int port;
-    private final AtomicReference<Runnable> closers = new AtomicReference<>(() -> {});
+    private final AtomicReference<IntConsumer> closers = new AtomicReference<>(port -> {});
     private final AtomicBoolean closed = new AtomicBoolean();
 
     private PortRef(int port) {
@@ -578,12 +579,11 @@ public class PortManager {
 
     /**
      * Prepends a close action to this {@code PortRef}.  Actions are executed
-     * in reverse order of their addition.  The {@code Runnable} supplied as
-     * {@code action} <b>must not</b> contain a reference to the {@code PortRef}
-     * instance itself.
+     * in reverse order of their addition.  Each action is passed the port
+     * number being closed.
      * @param action the action to take to close this {@code PortRef} instance
      */
-    void onClose(Runnable action) {
+    void onClose(IntConsumer action) {
       closers.accumulateAndGet(action, PortManager::combine);
     }
 
@@ -591,7 +591,7 @@ public class PortManager {
      * Gets the "closers" {@code AtomicReference} for use during weak-reference release.
      * @return the {@code AtomicReference} instance to call for closing this {@code PortRef}
      */
-    private AtomicReference<Runnable> closers() {
+    private AtomicReference<IntConsumer> closers() {
       return closers;
     }
 
@@ -617,32 +617,32 @@ public class PortManager {
     @Override
     public void close() {
       if (closed.compareAndSet(false, true)) {
-        Optional.ofNullable(closers.getAndSet(null)).ifPresent(Runnable::run);
+        Optional.ofNullable(closers.getAndSet(null)).ifPresent(action -> action.accept(port));
       }
     }
   }
 
   /**
-   * Combines {@code Runnable} instances to run in reverse sequence.
-   * @param a the second {@code Runnable} to run
-   * @param b the first {@code Runnable} to run
-   * @return a new {@code Runnable} running {@code b} then {@code a}
+   * Combines {@code IntConsumer} instances to run in reverse sequence.
+   * @param a the second {@code IntConsumer} to run
+   * @param b the first {@code IntConsumer} to run
+   * @return a new {@code IntConsumer} running {@code b} then {@code a}
    */
-  private static Runnable combine(Runnable a, Runnable b) {
+  private static IntConsumer combine(IntConsumer a, IntConsumer b) {
     requireNonNull(a, "a");
     requireNonNull(b, "b");
-    return () -> {
+    return i -> {
       try {
-        b.run();
+        b.accept(i);
       } catch (Throwable t1) {
         try {
-          a.run();
+          a.accept(i);
         } catch (Throwable t2) {
           t1.addSuppressed(t2);
         }
         throw t1;
       }
-      a.run();
+      a.accept(i);
     };
   }
 
