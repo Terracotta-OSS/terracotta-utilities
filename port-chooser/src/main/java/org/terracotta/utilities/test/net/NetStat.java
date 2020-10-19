@@ -304,55 +304,50 @@ public class NetStat {
     List<String> fields = new ArrayList<>();
 
     StringBuilder sb = new StringBuilder();
-    boolean firstCharOfField = true;
-    boolean inQuotedString = false;
-    boolean possibleNestedQuote = false;
-    StringCharacterIterator iterator = new StringCharacterIterator(line + ',');
+    int quoteCount = 0;
+    StringCharacterIterator iterator = new StringCharacterIterator(line);
     for (char c = iterator.first(); c != CharacterIterator.DONE; c = iterator.next()) {
       switch (c) {
         case '"':
-          if (possibleNestedQuote) {
+          if (quoteCount++ != 0 && quoteCount % 2 != 0) {
             sb.append('"');
-            possibleNestedQuote = false;
-          } else if (inQuotedString) {
-            // Need to hold the quote in suspension
-            possibleNestedQuote = true;
-          } else if (firstCharOfField) {
-            inQuotedString = true;
-          } else {
-            throw new IllegalArgumentException("Unexpected quote in value at index " +
-                iterator.getIndex() + " - " + line);
           }
           break;
         case ',':
-          if (possibleNestedQuote) {
-            inQuotedString = false;
-            possibleNestedQuote = false;
-          }
-          if (inQuotedString) {
-            sb.append(',');
-          } else {
+          if (quoteCount % 2 == 0) {
             fields.add(sb.toString());
             sb.setLength(0);
-            inQuotedString = false;
-            possibleNestedQuote = false;
-            firstCharOfField = true;
-            continue;
+            quoteCount = 0;
+          } else {
+            sb.append(',');
           }
           break;
         default:
           sb.append(c);
       }
-      firstCharOfField = false;
+    }
+    if (quoteCount % 2 != 0) {
+      throw new IllegalArgumentException("Line ends with unbalanced quote at index " +
+          iterator.getIndex() + " - " + line);
+    }
+    if (sb.length() > 0) {
+      fields.add(sb.toString());
     }
 
     BusyPort.Builder builder = BusyPort.builder();
-    builder.processId(fields.get(0));
-    builder.localEndpoint(BusyPort.IPVersion.IPV4, fields.get(1), fields.get(2));
-    builder.remoteEndpoint(BusyPort.IPVersion.IPV4, fields.get(3), fields.get(4));
-    builder.state(BusyPort.TcpState.fromMicrosoftString(fields.get(5)));
-    builder.shortCommand(fields.get(6));
-    builder.commandLine(fields.get(7));
+    try {
+      builder.processId(fields.get(0));
+      builder.localEndpoint(BusyPort.IPVersion.IPV4, fields.get(1), fields.get(2));
+      builder.remoteEndpoint(BusyPort.IPVersion.IPV4, fields.get(3), fields.get(4));
+      builder.state(BusyPort.TcpState.fromMicrosoftString(fields.get(5)));
+      builder.shortCommand(fields.get(6));
+      // The full command line may be missing ...
+      if (fields.size() >= 8) {
+        builder.commandLine(fields.get(7));
+      }
+    } catch (RuntimeException e) {
+      throw new IllegalArgumentException("Error in line - " + line, e);
+    }
 
     return builder.build();
   }
@@ -839,7 +834,7 @@ public class NetStat {
     /**
      * Gets the <i>long</i> representation of the command.  This value
      * is the full command line if available.
-     * @return the long command string
+     * @return the long command string; may be {@code null}
      */
     public String commandLine() {
       return commandLine;
