@@ -72,7 +72,7 @@ public class PortManagerTest {
     assertThat(() -> portManager.reservePorts(-1), threw(instanceOf(IllegalArgumentException.class)));
   }
 
-  @Test(timeout = 5000)
+  @Test(timeout = 50000)
   public void testReserveSinglePort() {
     PortManager.PortRef portRef = portManager.reservePort();
     assertNotNull(portRef);
@@ -94,14 +94,14 @@ public class PortManagerTest {
     }
   }
 
-  @Test(timeout = 5000)
+  @Test(timeout = 50000)
   public void testMultipleClose() {
     PortManager.PortRef portRef = portManager.reservePort();
     portRef.close();
     portRef.close();
   }
 
-  @Test(timeout = 20000)
+  @Test(timeout = 200000)
   public void testDereferencedPortIsReleased() {
     PortManager.PortRef portRef = portManager.reservePort();
     assertNotNull(portRef);
@@ -126,7 +126,7 @@ public class PortManagerTest {
     }
   }
 
-  @Test(timeout = 20000)
+  @Test(timeout = 200000)
   public void testReserveCount() {
     for (int count : Arrays.asList(1, 2, 4, 8)) {
       List<PortManager.PortRef> portList = portManager.reservePorts(count);
@@ -139,7 +139,7 @@ public class PortManagerTest {
    * This test artificially constrains the ports available for reservation by
    * altering the {@code portMap} using reflection.
    */
-  @Test(timeout = 5000)
+  @Test(timeout = 50000)
   public void testConstrainedEnvironment() throws Exception {
     Field portMapField = PortManager.class.getDeclaredField("portMap");
     portMapField.setAccessible(true);
@@ -170,7 +170,7 @@ public class PortManagerTest {
     }
   }
 
-  @Test(timeout = 5000)
+  @Test(timeout = 50000)
   @SuppressWarnings("try")
   public void testExistingServerPort() throws Exception {
     PortManager.PortRef portRef = portManager.reservePort();
