@@ -5,6 +5,9 @@ import org.junit.rules.ExternalResource;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.reflect.Array;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 
 import static org.junit.Assert.fail;
 
@@ -49,7 +52,7 @@ public class TemporaryFolder extends ExternalResource {
     private static final String TMP_PREFIX = "junit";
 
     /**
-     * Create a temporary folder which uses system default temporary-file 
+     * Create a temporary folder which uses system default temporary-file
      * directory to create temporary resources.
      */
     public TemporaryFolder() {
@@ -88,7 +91,7 @@ public class TemporaryFolder extends ExternalResource {
 
     /**
      * Builds an instance of {@link TemporaryFolder}.
-     * 
+     *
      * @since 4.13
      */
     public static class Builder {
@@ -230,7 +233,45 @@ public class TemporaryFolder extends ExternalResource {
         return createTemporaryFolderIn(getRoot());
     }
 
-    private File createTemporaryFolderIn(File parentFolder) throws IOException {
+    private static File createTemporaryFolderIn(File parentFolder) throws IOException {
+        try {
+            return createTemporaryFolderWithNioApi(parentFolder);
+        } catch (ClassNotFoundException ignore) {
+            // Fallback for Java 5 and 6
+            return createTemporaryFolderWithFileApi(parentFolder);
+        } catch (InvocationTargetException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof IOException) {
+                throw (IOException) cause;
+            }
+            if (cause instanceof RuntimeException) {
+                throw (RuntimeException) cause;
+            }
+            IOException exception = new IOException("Failed to create temporary folder in " + parentFolder);
+            exception.initCause(cause);
+            throw exception;
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to create temporary folder in " + parentFolder, e);
+        }
+    }
+
+    private static File createTemporaryFolderWithNioApi(File parentFolder) throws ClassNotFoundException, NoSuchMethodException, InvocationTargetException, IllegalAccessException {
+        Class<?> filesClass = Class.forName("java.nio.file.Files");
+        Object fileAttributeArray = Array.newInstance(Class.forName("java.nio.file.attribute.FileAttribute"), 0);
+        Class<?> pathClass = Class.forName("java.nio.file.Path");
+        Object tempDir;
+        if (parentFolder != null) {
+            Method createTempDirectoryMethod = filesClass.getDeclaredMethod("createTempDirectory", pathClass, String.class, fileAttributeArray.getClass());
+            Object parentPath = File.class.getDeclaredMethod("toPath").invoke(parentFolder);
+            tempDir = createTempDirectoryMethod.invoke(null, parentPath, TMP_PREFIX, fileAttributeArray);
+        } else {
+            Method createTempDirectoryMethod = filesClass.getDeclaredMethod("createTempDirectory", String.class, fileAttributeArray.getClass());
+            tempDir = createTempDirectoryMethod.invoke(null, TMP_PREFIX, fileAttributeArray);
+        }
+        return (File) pathClass.getDeclaredMethod("toFile").invoke(tempDir);
+    }
+
+    private static File createTemporaryFolderWithFileApi(File parentFolder) throws IOException {
         File createdFolder = null;
         for (int i = 0; i < TEMP_DIR_ATTEMPTS; ++i) {
             // Use createTempFile to get a suitable folder name.
@@ -288,7 +329,7 @@ public class TemporaryFolder extends ExternalResource {
         if (folder == null) {
             return true;
         }
-        
+
         return recursiveDelete(folder);
     }
 
