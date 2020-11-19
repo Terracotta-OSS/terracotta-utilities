@@ -18,6 +18,7 @@ package org.terracotta.utilities.test.net;
 import org.junit.Ignore;
 import org.junit.Test;
 
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.net.ServerSocket;
 import java.time.Duration;
@@ -26,6 +27,8 @@ import java.util.Arrays;
 import java.util.BitSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.instanceOf;
@@ -33,6 +36,8 @@ import static org.hamcrest.Matchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.lessThan;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.sameInstance;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.terracotta.utilities.test.matchers.Eventually.within;
@@ -177,6 +182,115 @@ public class PortManagerTest {
     Optional<PortManager.PortRef> optional = portManager.reserve(port);
     assertTrue(optional.isPresent());
     optional.get().close();
+  }
+
+  @Test
+  public void testGetPortRefActive() {
+    try (PortManager.PortRef portRef = portManager.reservePort()) {
+      int port = portRef.port();
+      assertThat(portManager.getPortRef(port).orElseThrow(AssertionError::new), is(sameInstance(portRef)));
+      assertFalse(portRef.isClosed());
+    }
+  }
+
+  @Test
+  public void testGetPortRefClosed() {
+    int port;
+    PortManager.PortRef portRef = portManager.reservePort();
+    try {
+      port = portRef.port();
+    } finally {
+      portRef.close();
+    }
+    assertThat(portManager.getPortRef(port), is(Optional.empty()));
+    assertTrue(portRef.isClosed());
+  }
+
+  @Test
+  public void testGetPortRefReclaimed() throws Exception {
+    PortManager.PortRef portRef = portManager.reservePort();
+    try {
+      int port = portRef.port();
+
+      WeakReference<PortManager.PortRef> reference = new WeakReference<>(portRef);
+      portRef = null;         // Make eligible for garbage collection
+
+      while (reference.get() != null) {
+        System.gc();
+        TimeUnit.MILLISECONDS.sleep(1000);
+      }
+
+      assertThat(portManager.getPortRef(port), is(Optional.empty()));
+
+    } finally {
+      if (portRef != null) {
+        portRef.close();
+      }
+    }
+  }
+
+  @Test
+  public void testGetPortRefWhenClosing() {
+    PortManager.PortRef portRef = portManager.reservePort();
+    try {
+      int port = portRef.port();
+
+      /*
+       * This relies on the first-in, last-out nature of the onClose actions --
+       * the port is first marked closed then the onClose actions are executed.
+       */
+      AtomicReference<Optional<PortManager.PortRef>> altPortRef = new AtomicReference<>();
+      portRef.onClose(() -> altPortRef.set(portManager.getPortRef(port)));
+
+      assertThat(portManager.getPortRef(port).orElseThrow(AssertionError::new), is(sameInstance(portRef)));
+
+      assertFalse(portRef.isClosed());
+      portRef.close();
+      assertTrue(portRef.isClosed());
+
+      assertThat(altPortRef.get(), is(Optional.empty()));
+
+    } finally {
+      portRef.close();
+    }
+  }
+
+  @Test
+  public void testIsReservablePort() {
+    assertThat(() -> portManager.isReservablePort(65536), threw(instanceOf(IllegalArgumentException.class)));
+    assertThat(() -> portManager.isReservablePort(-1), threw(instanceOf(IllegalArgumentException.class)));
+
+    BitSet restrictedPorts = new BitSet();
+    restrictedPorts.set(0, 1025);   // System ports aren't reservable
+
+    EphemeralPorts.Range range = EphemeralPorts.getRange();
+    restrictedPorts.set(range.getLower(), 1 + range.getUpper());      // Ephemeral ports aren't reservable
+
+    assertFalse(portManager.isReservablePort(0));
+    assertFalse(portManager.isReservablePort(22));
+    assertFalse(portManager.isReservablePort(range.getLower()));
+    assertFalse(portManager.isReservablePort((range.getUpper() + range.getLower()) / 2));
+    assertFalse(portManager.isReservablePort(range.getUpper()));
+
+    int reservablePort = restrictedPorts.nextClearBit(1024);
+    try {
+      Optional<PortManager.PortRef> portRef = portManager.reserve(reservablePort);
+      portRef.ifPresent(PortManager.PortRef::close);
+    } catch (IllegalArgumentException e) {
+      throw new AssertionError("portManager.reservePort(" + reservablePort + ") failed", e);
+    }
+
+    reservablePort = restrictedPorts.previousClearBit(65535);
+    try {
+      Optional<PortManager.PortRef> portRef = portManager.reserve(reservablePort);
+      portRef.ifPresent(PortManager.PortRef::close);
+    } catch (IllegalArgumentException e) {
+      throw new AssertionError("portManager.reservePort(" + reservablePort + ") failed", e);
+    }
+
+    try (PortManager.PortRef portRef = portManager.reservePort()) {
+      assertTrue(portManager.isReservablePort(portRef.port()));
+    }
   }
 
   /**
