@@ -196,18 +196,11 @@ public class PortManager {
    *    {@value #MAXIMUM_PORT_NUMBER} (inclusive) or is not a reservable port
    */
   public synchronized Optional<PortRef> getPortRef(int port) {
-    if (port < 0 || port > MAXIMUM_PORT_NUMBER) {
-      throw new IllegalArgumentException("Port " + port + " is not a valid port number");
-    }
-    if (restrictedPorts.get(port)) {
+    if (!isReservablePort(port)) {
       throw new IllegalArgumentException("Port " + port + " is not reservable");
     }
 
     cleanReleasedPorts();
-    if (!portMap.get(port)) {
-      return Optional.empty();
-    }
-
     return Optional.ofNullable(allocatedPorts.get(port))
         .map(AllocatedPort::get)
         .filter(portRef -> !portRef.isClosed());
@@ -230,10 +223,7 @@ public class PortManager {
    * @throws IllegalStateException if reservation fails due to an error
    */
   public synchronized Optional<PortRef> reserve(int port) {
-    if (port < 0 || port > MAXIMUM_PORT_NUMBER) {
-      throw new IllegalArgumentException("Port " + port + " is not a valid port number");
-    }
-    if (restrictedPorts.get(port)) {
+    if (!isReservablePort(port)) {
       throw new IllegalArgumentException("Port " + port + " is not reservable");
     }
 
