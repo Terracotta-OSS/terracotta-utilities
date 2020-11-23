@@ -45,6 +45,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Random;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.IntUnaryOperator;
 
@@ -102,7 +103,11 @@ public class PortManager {
 
   private final Random rnd = new SecureRandom();
 
-  private final BitSet reservedPorts = new BitSet();
+  /**
+   * Marks the ports which cannot be allocated by this class.  A {@code true}
+   * bit in this {@code BitSet} indicates a non-reservable (restricted) port.
+   */
+  private final BitSet restrictedPorts = new BitSet();
 
   /**
    * Port allocation map.  A zero bit represents an available port.
@@ -148,7 +153,7 @@ public class PortManager {
     EphemeralPorts.Range range = EphemeralPorts.getRange();
     portMap.set(range.getLower(), range.getUpper() + 1);
 
-    reservedPorts.or(portMap);
+    restrictedPorts.or(portMap);
 
     assignablePortCount = MAXIMUM_PORT_NUMBER + 1 - portMap.cardinality();
     if (assignablePortCount < MINIMUM_ASSIGNABLE_PORT_COUNT) {
@@ -157,6 +162,48 @@ public class PortManager {
               "\n*****************************************************************************************",
           assignablePortCount, range);
     }
+  }
+
+  /**
+   * Indicates if the designated port is in the range of ports that <i>may</i> be allocated
+   * by this class.  If the designated port is in the range of ports that may be allocated,
+   * the {@link #reserve(int)} method may be used to attempt to allocate the port.  The port
+   * may also be returned from the {@link #reservePort()} and {@link #reservePorts(int)} methods.
+   * @throws IllegalArgumentException if {@code port} is not between 0 and
+   *    {@value #MAXIMUM_PORT_NUMBER} (inclusive)
+   */
+  public boolean isReservablePort(int port) {
+    if (port < 0 || port > MAXIMUM_PORT_NUMBER) {
+      throw new IllegalArgumentException("Port " + port + " is not a valid port number");
+    }
+    return !restrictedPorts.get(port);
+  }
+
+  /**
+   * Gets the <i>active</i> {@link PortRef} instance for the designated port.
+   * <p>
+   * This method returns a reference to the most recent {@code PortRef} created
+   * for the designated port if the {@code PortRef} is both <i>strongly reachable</i>
+   * and not closed.  The result of this method may be immediately stale -- the
+   * {@code PortRef} may be closed between the time the {@code PortRef} is checked
+   * and the reference returned to the called.
+   * @param port the port number for which the {@code PortRef} is returned
+   * @return an {@code Optional} of the {@code PortRef} for {@code port} if the
+   *      {@code PortRef} is both strongly reachable and not closed;
+   *      {@code Optional.empty} if the {@code PortRef} for {@code port} is either
+   *      not strongly reachable or closed
+   * @throws IllegalArgumentException if {@code port} is not between 0 and
+   *    {@value #MAXIMUM_PORT_NUMBER} (inclusive) or is not a reservable port
+   */
+  public synchronized Optional<PortRef> getPortRef(int port) {
+    if (!isReservablePort(port)) {
+      throw new IllegalArgumentException("Port " + port + " is not reservable");
+    }
+
+    cleanReleasedPorts();
+    return Optional.ofNullable(allocatedPorts.get(port))
+        .map(AllocatedPort::get)
+        .filter(portRef -> !portRef.isClosed());
   }
 
   /**
@@ -176,10 +223,7 @@ public class PortManager {
    * @throws IllegalStateException if reservation fails due to an error
    */
   public synchronized Optional<PortRef> reserve(int port) {
-    if (port < 0 || port > MAXIMUM_PORT_NUMBER) {
-      throw new IllegalArgumentException("Port " + port + " is not a valid port number");
-    }
-    if (reservedPorts.get(port)) {
+    if (!isReservablePort(port)) {
       throw new IllegalArgumentException("Port " + port + " is not reservable");
     }
 
@@ -250,7 +294,7 @@ public class PortManager {
      * Get a starting point for a free port search that's not a system or ephemeral port.
      */
     int startingPoint;
-    while (reservedPorts.get(startingPoint = rnd.nextInt(MAXIMUM_PORT_NUMBER + 1))) {
+    while (restrictedPorts.get(startingPoint = rnd.nextInt(MAXIMUM_PORT_NUMBER + 1))) {
       // empty
     }
     LOGGER.trace("Starting port reservation search at {}", startingPoint);
@@ -503,6 +547,7 @@ public class PortManager {
   public static class PortRef implements AutoCloseable {
     private final int port;
     private final AtomicReference<Runnable> closers = new AtomicReference<>(() -> {});
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     private PortRef(int port) {
       this.port = port;
@@ -534,11 +579,21 @@ public class PortManager {
     }
 
     /**
+     * Returns whether or not this {@code PortRef} is closed.
+     * @return {@code true} if this {@code PortRef} has been closed; {@code false} otherwise
+     */
+    public boolean isClosed() {
+      return closed.get();
+    }
+
+    /**
      * Closes this {@code PortRef}.
      */
     @Override
     public void close() {
-      Optional.ofNullable(closers.getAndSet(null)).ifPresent(Runnable::run);
+      if (closed.compareAndSet(false, true)) {
+        Optional.ofNullable(closers.getAndSet(null)).ifPresent(Runnable::run);
+      }
     }
   }
 
