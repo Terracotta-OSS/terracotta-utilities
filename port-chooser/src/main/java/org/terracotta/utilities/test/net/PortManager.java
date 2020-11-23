@@ -70,8 +70,23 @@ import static java.util.stream.Collectors.toList;
  * <p>
  * All users of {@code PortManager} in a JVM must use the same {@code PortManager}
  * instance to ensure proper intra-JVM reservations.
+ * <p>
+ * By default, release of an assigned port back to {@code PortManager} (via {@link PortRef#close()}
+ * or garbage collection of a weakly-reachable {@code PortRef} instance) performs a check that
+ * the port is actually unused.  This involves querying both the in-use ports and active processes
+ * on the system and, on some systems, could be a time-consuming activity.  While the check is
+ * intended to identify "outside" interference with ports assigned by {@code PortManager}, it
+ * is possible to disable this check by setting the {@value #DISABLE_PORT_RELEASE_CHECK_PROPERTY}
+ * property to {@code true}.  The property value is examined each time the release check is
+ * performed so the check may be disabled for some tests and left enabled for others.
  */
 public class PortManager {
+  /**
+   * Property checked for <i>disabling</i> the port release check performed at the time
+   * a port obtained from {@code PortManager} is returned to {@code PortManager}.
+   */
+  public static final String DISABLE_PORT_RELEASE_CHECK_PROPERTY = "org.terracotta.disablePortReleaseCheck";
+
   private static final Logger LOGGER = LoggerFactory.getLogger(PortManager.class);
 
   private static final PortManager INSTANCE = new PortManager();
@@ -483,23 +498,26 @@ public class PortManager {
 
   /**
    * Checks that the port being released is actually free and emits a detailed log message
-   * if not.
+   * if not.  This check is <b>not</b> performed if {@value #DISABLE_PORT_RELEASE_CHECK_PROPERTY}
+   * is set to {@code true}.
    * @param port the port to check
    */
   private void diagnosticReleaseCheck(int port) {
-    try {
-      List<NetStat.BusyPort> collisions = NetStat.info().stream()
-          .filter(p -> p.localEndpoint().getPort() == port)
-          .collect(toList());
-      if (!collisions.isEmpty()) {
-        LOGGER.error("Port {} being released to PortManager is in use by the following:\n{}",
-            port, collisions.stream()
-                .map(NetStat.BusyPort::toString)
-                .map(s -> "    " + s)
-                .collect(joining("\n")));
+    if (!Boolean.getBoolean(DISABLE_PORT_RELEASE_CHECK_PROPERTY)) {
+      try {
+        List<NetStat.BusyPort> collisions = NetStat.info().stream()
+            .filter(p -> p.localEndpoint().getPort() == port)
+            .collect(toList());
+        if (!collisions.isEmpty()) {
+          LOGGER.error("Port {} being released to PortManager is in use by the following:\n{}",
+              port, collisions.stream()
+                  .map(NetStat.BusyPort::toString)
+                  .map(s -> "    " + s)
+                  .collect(joining("\n")));
+        }
+      } catch (RuntimeException e) {
+        LOGGER.warn("Unable to obtain busy port information to verify release of port {}", port, e);
       }
-    } catch (RuntimeException e) {
-      LOGGER.warn("Unable to obtain busy port information to verify release of port {}", port, e);
     }
   }
 
