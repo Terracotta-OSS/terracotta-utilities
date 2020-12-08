@@ -47,11 +47,14 @@ import java.util.OptionalLong;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.IntConsumer;
 import java.util.function.IntUnaryOperator;
 
 import static java.lang.Integer.toHexString;
 import static java.lang.System.identityHashCode;
 import static java.util.Objects.requireNonNull;
+import static java.util.stream.Collectors.joining;
+import static java.util.stream.Collectors.toList;
 
 /**
  * Manages TCP port reservation/de-reservation while attempting to avoid
@@ -67,8 +70,23 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * All users of {@code PortManager} in a JVM must use the same {@code PortManager}
  * instance to ensure proper intra-JVM reservations.
+ * <p>
+ * By default, release of an assigned port back to {@code PortManager} (via {@link PortRef#close()}
+ * or garbage collection of a weakly-reachable {@code PortRef} instance) performs a check that
+ * the port is actually unused.  This involves querying both the in-use ports and active processes
+ * on the system and, on some systems, could be a time-consuming activity.  While the check is
+ * intended to identify "outside" interference with ports assigned by {@code PortManager}, it
+ * is possible to disable this check by setting the {@value #DISABLE_PORT_RELEASE_CHECK_PROPERTY}
+ * property to {@code true}.  The property value is examined each time the release check is
+ * performed so the check may be disabled for some tests and left enabled for others.
  */
 public class PortManager {
+  /**
+   * Property checked for <i>disabling</i> the port release check performed at the time
+   * a port obtained from {@code PortManager} is returned to {@code PortManager}.
+   */
+  public static final String DISABLE_PORT_RELEASE_CHECK_PROPERTY = "org.terracotta.disablePortReleaseCheck";
+
   private static final Logger LOGGER = LoggerFactory.getLogger(PortManager.class);
 
   private static final PortManager INSTANCE = new PortManager();
@@ -370,7 +388,7 @@ public class PortManager {
       // 1) Mark the port reserved in presumption the vetting will succeed
       portMap.set(candidatePort);
       allocatedPorts.put(portRef.port, new AllocatedPort(portRef, dereferencedPorts));
-      portRef.onClose(() -> release(candidatePort));
+      portRef.onClose(this::release);
 
       // 2) Create a server Socket for the candidate port
       boolean systemLevelLockHeld;
@@ -394,6 +412,7 @@ public class PortManager {
               classLoader.getClass().getSimpleName(),
               toHexString(identityHashCode(classLoader)));
           releaseRequired = false;   // Vetting successful; don't close PortRef on exit
+          portRef.onClose(this::diagnosticReleaseCheck);
           return portRef;
         } else {
           LOGGER.trace("Port {} failed refusesConnect", candidatePort);
@@ -477,6 +496,31 @@ public class PortManager {
     return isFree;
   }
 
+  /**
+   * Checks that the port being released is actually free and emits a detailed log message
+   * if not.  This check is <b>not</b> performed if {@value #DISABLE_PORT_RELEASE_CHECK_PROPERTY}
+   * is set to {@code true}.
+   * @param port the port to check
+   */
+  private void diagnosticReleaseCheck(int port) {
+    if (!Boolean.getBoolean(DISABLE_PORT_RELEASE_CHECK_PROPERTY)) {
+      try {
+        List<NetStat.BusyPort> collisions = NetStat.info().stream()
+            .filter(p -> p.localEndpoint().getPort() == port)
+            .collect(toList());
+        if (!collisions.isEmpty()) {
+          LOGGER.error("Port {} being released to PortManager is in use by the following:\n{}",
+              port, collisions.stream()
+                  .map(NetStat.BusyPort::toString)
+                  .map(s -> "    " + s)
+                  .collect(joining("\n")));
+        }
+      } catch (RuntimeException e) {
+        LOGGER.warn("Unable to obtain busy port information to verify release of port {}", port, e);
+      }
+    }
+  }
+
   @SuppressFBWarnings("DE_MIGHT_IGNORE")
   private static void emitInstanceNotification(String use) {
     try {
@@ -525,7 +569,7 @@ public class PortManager {
    */
   private static class AllocatedPort extends WeakReference<PortRef> {
     private final int port;
-    private final AtomicReference<Runnable> closer;
+    private final AtomicReference<IntConsumer> closer;
     private AllocatedPort(PortRef referent, ReferenceQueue<? super PortRef> q) {
       super(referent, q);
       this.port = referent.port();
@@ -534,7 +578,7 @@ public class PortManager {
 
     private void release() {
       try {
-        Optional.ofNullable(this.closer.get()).ifPresent(Runnable::run);
+        Optional.ofNullable(this.closer.get()).ifPresent(action -> action.accept(port));
       } catch (Exception ignored) {
       }
     }
@@ -546,7 +590,7 @@ public class PortManager {
    */
   public static class PortRef implements AutoCloseable {
     private final int port;
-    private final AtomicReference<Runnable> closers = new AtomicReference<>(() -> {});
+    private final AtomicReference<IntConsumer> closers = new AtomicReference<>(port -> {});
     private final AtomicBoolean closed = new AtomicBoolean();
 
     private PortRef(int port) {
@@ -555,10 +599,11 @@ public class PortManager {
 
     /**
      * Prepends a close action to this {@code PortRef}.  Actions are executed
-     * in reverse order of their addition.
+     * in reverse order of their addition.  Each action is passed the port
+     * number being closed.
      * @param action the action to take to close this {@code PortRef} instance
      */
-    void onClose(Runnable action) {
+    void onClose(IntConsumer action) {
       closers.accumulateAndGet(action, PortManager::combine);
     }
 
@@ -566,7 +611,7 @@ public class PortManager {
      * Gets the "closers" {@code AtomicReference} for use during weak-reference release.
      * @return the {@code AtomicReference} instance to call for closing this {@code PortRef}
      */
-    private AtomicReference<Runnable> closers() {
+    private AtomicReference<IntConsumer> closers() {
       return closers;
     }
 
@@ -592,32 +637,32 @@ public class PortManager {
     @Override
     public void close() {
       if (closed.compareAndSet(false, true)) {
-        Optional.ofNullable(closers.getAndSet(null)).ifPresent(Runnable::run);
+        Optional.ofNullable(closers.getAndSet(null)).ifPresent(action -> action.accept(port));
       }
     }
   }
 
   /**
-   * Combines {@code Runnable} instances to run in reverse sequence.
-   * @param a the second {@code Runnable} to run
-   * @param b the first {@code Runnable} to run
-   * @return a new {@code Runnable} running {@code b} then {@code a}
+   * Combines {@code IntConsumer} instances to run in reverse sequence.
+   * @param a the second {@code IntConsumer} to run
+   * @param b the first {@code IntConsumer} to run
+   * @return a new {@code IntConsumer} running {@code b} then {@code a}
    */
-  private static Runnable combine(Runnable a, Runnable b) {
+  private static IntConsumer combine(IntConsumer a, IntConsumer b) {
     requireNonNull(a, "a");
     requireNonNull(b, "b");
-    return () -> {
+    return i -> {
       try {
-        b.run();
+        b.accept(i);
       } catch (Throwable t1) {
         try {
-          a.run();
+          a.accept(i);
         } catch (Throwable t2) {
           t1.addSuppressed(t2);
         }
         throw t1;
       }
-      a.run();
+      a.accept(i);
     };
   }
 
