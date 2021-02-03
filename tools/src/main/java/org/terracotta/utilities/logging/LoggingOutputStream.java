@@ -15,8 +15,6 @@
  */
 package org.terracotta.utilities.logging;
 
-import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.event.Level;
@@ -37,6 +35,10 @@ import static java.lang.invoke.MethodType.methodType;
  * a {@link Logger} at a specified level.  Bytes are accumulated by this
  * {@code OutputStream} until a {@link System#lineSeparator()} value is found;
  * once the line ending is found, the line is flushed to the logger.
+ * <p>
+ * Bytes written to a {@code LoggingOutputStream} instance must have been
+ * encoded using {@link StandardCharsets#UTF_8 UTF-8}.  This affects proper
+ * recognition of line separators and re-assembly of logged strings.
  */
 public class LoggingOutputStream extends OutputStream {
   private static final Logger LOGGER = LoggerFactory.getLogger(LoggingOutputStream.class);
@@ -50,9 +52,6 @@ public class LoggingOutputStream extends OutputStream {
   private final byte eol;
   private final byte eolLeader;
 
-  @SuppressFBWarnings(value = "SS_SHOULD_BE_STATIC", justification = "Awaiting option to disable autoFlush")
-  private final boolean autoFlush = true;
-
   private volatile boolean closed = false;
   private byte[] buffer = new byte[DEFAULT_BUFFER_SIZE];
   private int bufferSize = DEFAULT_BUFFER_SIZE;
@@ -62,6 +61,8 @@ public class LoggingOutputStream extends OutputStream {
   /**
    * Creates a new {@code LoggingOutputStream} writing to the provided logger and the
    * specified level.
+   * <p>
+   * Bytes written to this {@code LoggingOutputStream} must be UTF-8 encoded characters.
    * @param logger the SLF4J {@code Logger} instance to which the stream should write
    * @param level the SLF4J level at which the stream is recorded to {@code logger}
    */
@@ -88,11 +89,9 @@ public class LoggingOutputStream extends OutputStream {
         haveLeader = true;        // Remember the leader; processed along with the next byte
       } else {
         if ((byte)b == eol) {
-          if (autoFlush) {
-            haveLeader = false;   // Awaited EOL received; leader consumed with EOL in flush
-            flushInternal();
-            return;
-          }
+          haveLeader = false;   // Awaited EOL received; leader consumed with EOL in flush
+          flushInternal();
+          return;
         }
 
         // Non-flushed EOL or a non-EOL byte, emit held leader
