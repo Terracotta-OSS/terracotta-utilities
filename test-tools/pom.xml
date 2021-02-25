@@ -22,7 +22,7 @@
   <parent>
     <groupId>org.terracotta</groupId>
     <artifactId>terracotta-utilities-parent</artifactId>
-    <version>0.0-SNAPSHOT</version>
+    <version>0.0.7</version>
     <relativePath>..</relativePath>
   </parent>
 
