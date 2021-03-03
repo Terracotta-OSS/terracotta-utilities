@@ -35,6 +35,8 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
+import java.security.AccessController;
+import java.security.PrivilegedAction;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.BitSet;
@@ -187,6 +189,7 @@ public class PortManager {
    * by this class.  If the designated port is in the range of ports that may be allocated,
    * the {@link #reserve(int)} method may be used to attempt to allocate the port.  The port
    * may also be returned from the {@link #reservePort()} and {@link #reservePorts(int)} methods.
+   * @param port the port number to test
    * @throws IllegalArgumentException if {@code port} is not between 0 and
    *    {@value #MAXIMUM_PORT_NUMBER} (inclusive)
    */
@@ -517,6 +520,13 @@ public class PortManager {
         }
       } catch (RuntimeException e) {
         LOGGER.warn("Unable to obtain busy port information to verify release of port {}", port, e);
+        try {
+          AccessController.doPrivileged(
+              (PrivilegedAction<String>)() -> System.setProperty(DISABLE_PORT_RELEASE_CHECK_PROPERTY, "true"));
+          LOGGER.warn("Further use of diagnostic busy port check in this JVM disabled");
+        } catch (SecurityException exception) {
+          LOGGER.debug("Failed to disable further use of diagnostic busy port check", exception);
+        }
       }
     }
   }

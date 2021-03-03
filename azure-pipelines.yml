@@ -26,9 +26,20 @@ resources:
 jobs:
 - template: build-templates/maven-common.yml@templates  
   parameters:
-    jobName: 'Linux'
+    jobName: 'Linux_Hosted'
     
 - template: build-templates/maven-common.yml@templates
   parameters:
+    jobName: 'Linux_OnPrem'
+    pool: tc_linux_pool
+
+- template: build-templates/maven-common.yml@templates
+  parameters:
     vmImage: 'windows-latest'
-    jobName: 'Windows'
+    jobName: 'Windows_Hosted'
+
+- template: build-templates/maven-common.yml@templates
+  parameters:
+    jobName: 'Windows_OnPrem'
+    pool: tc_windows_pool
+
