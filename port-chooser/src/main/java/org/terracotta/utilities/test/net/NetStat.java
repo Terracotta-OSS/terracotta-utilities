@@ -530,7 +530,7 @@ public class NetStat {
       "-nP",          // Use numeric IP addresses; use numeric ports
       "-iTCP",        // Match only TCP connections
       "-F",           // Field list ...
-      "0pPRgLnTtc",   // ... see 'parseLsof' for description
+      "0pPRgLnTftc",  // ... see 'parseLsof' for description
       "+c0",          // Use expanded COMMAND value
       "-w"            // Suppress warnings
   };
