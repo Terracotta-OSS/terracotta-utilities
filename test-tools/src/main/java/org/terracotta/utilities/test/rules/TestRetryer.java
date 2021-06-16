@@ -46,6 +46,7 @@ public class TestRetryer<T, R> implements TestRule, Supplier<R> {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(TestRetryer.class);
 
+  private final RetryMode retryMode;
   private final Function<T, R> mapper;
   private final Set<OutputIs> outputIs;
   private final Supplier<Stream<? extends T>> inputs;
@@ -59,7 +60,7 @@ public class TestRetryer<T, R> implements TestRule, Supplier<R> {
   private volatile boolean terminalAttempt = false;
   private volatile Map<Description, Object> attemptResults = Collections.emptyMap();
 
-  private final Map<Description, Throwable> accumulatedFailures = new ConcurrentHashMap<>();
+  private final Map<Description, Object> accumulatedResults = new ConcurrentHashMap<>();
 
   @SafeVarargs @SuppressWarnings("varargs") // Creating a stream from an array is safe
   public static <T> TestRetryer<T, T> tryValues(T... values) {
@@ -68,24 +69,29 @@ public class TestRetryer<T, R> implements TestRule, Supplier<R> {
 
   public static <T> TestRetryer<T, T> tryValues(Collection<? extends T> values) {
     requireNonNull(values).forEach(Objects::requireNonNull);
-    return new TestRetryer<>(values::stream, Function.identity(), EnumSet.noneOf(OutputIs.class));
+    return new TestRetryer<>(values::stream, Function.identity(), EnumSet.noneOf(OutputIs.class), RetryMode.FAILED);
   }
 
-  private TestRetryer(Supplier<Stream<? extends T>> values, Function<T, R> mapper, Set<OutputIs> outputIs) {
+  private TestRetryer(Supplier<Stream<? extends T>> values, Function<T, R> mapper, Set<OutputIs> outputIs, RetryMode retryMode) {
     this.inputs = () -> values.get().map(Objects::requireNonNull);
     this.mapper = requireNonNull(mapper);
     this.outputIs = requireNonNull(outputIs);
+    this.retryMode = retryMode;
   }
 
   public <O> TestRetryer<T, O> map(Function<? super R, ? extends O> mapper) {
-    return new TestRetryer<>(inputs, this.mapper.andThen(mapper), outputIs);
+    return new TestRetryer<>(inputs, this.mapper.andThen(mapper), outputIs, retryMode);
+  }
+
+  public TestRetryer<T, R> retry(RetryMode retryMode) {
+    return new TestRetryer<>(inputs, mapper, outputIs, retryMode);
   }
 
   public TestRetryer<T, R> outputIs(OutputIs a, OutputIs ... and) {
     Set<OutputIs> newOut = EnumSet.copyOf(this.outputIs);
     newOut.add(a);
     newOut.addAll(asList(and));
-    return new TestRetryer<>(inputs, this.mapper, newOut);
+    return new TestRetryer<>(inputs, this.mapper, newOut, retryMode);
   }
 
   @Override
@@ -120,7 +126,7 @@ public class TestRetryer<T, R> implements TestRule, Supplier<R> {
                 base.evaluate();
               }
             } catch (Throwable t) {
-              throw handleTestException(description, t);
+              throw handleTestFailure(description, t);
             } finally {
               assertTrue(outputRef.compareAndSet(output, null));
             }
@@ -162,34 +168,37 @@ public class TestRetryer<T, R> implements TestRule, Supplier<R> {
       @Override
       public void evaluate() throws Throwable {
         try {
-          target.evaluate();
+          retryMode.evaluate(accumulatedResults.get(description), target);
+          handleTestPass(description);
+        } catch (AssumptionViolatedException e) {
+          throw e;
         } catch (Throwable t) {
-          throw handleTestException(description, t);
-        } finally {
-          attemptResults.putIfAbsent(description, "PASSED");
+          throw handleTestFailure(description, t);
         }
       }
     };
   }
 
-  private Throwable handleTestException(Description description, Throwable t)  {
-    Throwable failure = (Throwable) attemptResults.merge(description, t, (a, b) -> {
-      if (a instanceof Throwable) {
-        ((Throwable) a).addSuppressed((Throwable) b);
-        return a;
-      } else {
-        return b;
-      }
-    });
-    Throwable merged = accumulatedFailures.merge(description, t, (a, b) -> {
-      b.addSuppressed(a);
-      return b;
-    });
+  private void handleTestPass(Description description)  {
+    attemptResults.merge(description, "PASSED", TestRetryer::mergeResults);
+    accumulatedResults.merge(description, "PASSED", TestRetryer::mergeResults);
+  }
+
+  private Throwable handleTestFailure(Description description, Throwable t)  {
+    Throwable failure = (Throwable) attemptResults.merge(description, t, TestRetryer::mergeResults);
+    Throwable merged = (Throwable) accumulatedResults.merge(description, t, TestRetryer::mergeResults);
     if (isTerminalAttempt()) {
       return merged;
     } else {
       return new AssumptionViolatedException("Failure for input parameter: " + input(), failure);
     }
+  }
+
+  static Object mergeResults(Object previous, Object current) {
+    if (current instanceof Throwable && previous instanceof Throwable) {
+      ((Throwable) current).addSuppressed((Throwable) previous);
+    }
+    return current;
   }
 
   public T input() {
@@ -205,7 +214,28 @@ public class TestRetryer<T, R> implements TestRule, Supplier<R> {
   }
 
   public enum OutputIs {
-    RULE, CLASS_RULE;
+    RULE, CLASS_RULE
+  }
+
+  public enum RetryMode {
+    ALL {
+      @Override
+      public void evaluate(Object result, Statement target) throws Throwable {
+        target.evaluate();
+      }
+    },
+    FAILED {
+      @Override
+      public void evaluate(Object result, Statement target) throws Throwable {
+        if (result == null || result instanceof Throwable) {
+          target.evaluate();
+        } else {
+          throw new AssumptionViolatedException("Test already passed");
+        }
+      }
+    };
+
+    public abstract void evaluate(Object result, Statement target) throws Throwable;
   }
 
   private static CharSequence indent(String string, Integer ... indent) {

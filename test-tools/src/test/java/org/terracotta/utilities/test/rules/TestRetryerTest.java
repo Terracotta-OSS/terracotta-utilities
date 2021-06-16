@@ -36,6 +36,8 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.internal.matchers.ThrowableMessageMatcher.hasMessage;
 import static org.terracotta.utilities.test.rules.TestRetryer.OutputIs.CLASS_RULE;
 import static org.terracotta.utilities.test.rules.TestRetryer.OutputIs.RULE;
+import static org.terracotta.utilities.test.rules.TestRetryer.RetryMode.ALL;
+import static org.terracotta.utilities.test.rules.TestRetryer.RetryMode.FAILED;
 
 public class TestRetryerTest {
 
@@ -153,6 +155,24 @@ public class TestRetryerTest {
     assertTrue(result.wasSuccessful());
     assertThat(result.getFailureCount(), is(0));
     assertThat(result.getRunCount(), is(16));
+  }
+
+  @Test
+  public void testPassingCrossedAssertions() throws InitializationError {
+    Result result = new JUnitCore().run(new JUnit4(PassingCrossedAssertionsTest.class));
+
+    assertTrue(result.wasSuccessful());
+    assertThat(result.getFailureCount(), is(0));
+    assertThat(result.getRunCount(), is(9));
+  }
+
+  @Test
+  public void testFailingCrossedAssertions() throws InitializationError {
+    Result result = new JUnitCore().run(new JUnit4(FailingCrossedAssertionsTest.class));
+
+    assertFalse(result.wasSuccessful());
+    assertThat(result.getFailureCount(), is(2));
+    assertThat(result.getRunCount(), is(9));
   }
 
   @Ignore
@@ -310,6 +330,50 @@ public class TestRetryerTest {
       assertThat("A input", RETRYER_A.input(), is(4));
       assertThat("B input", RETRYER_A.get().input(), is(4));
       assertThat("B", RETRYER_A.get().get(), is(16));
+    }
+  }
+
+  @Ignore
+  public static class PassingCrossedAssertionsTest {
+
+    @ClassRule @Rule
+    public static TestRetryer<Integer, Integer> RETRYER = TestRetryer.tryValues(1, 2, 3).retry(FAILED);
+
+    @Test
+    public void testA() {
+      assertThat(RETRYER.get(), is(1));
+    }
+
+    @Test
+    public void testB() {
+      assertThat(RETRYER.get(), is(2));
+    }
+
+    @Test
+    public void testC() {
+      assertThat(RETRYER.get(), is(3));
+    }
+  }
+
+  @Ignore
+  public static class FailingCrossedAssertionsTest {
+
+    @ClassRule @Rule
+    public static TestRetryer<Integer, Integer> RETRYER = TestRetryer.tryValues(1, 2, 3).retry(ALL);
+
+    @Test
+    public void testA() {
+      assertThat(RETRYER.input(), is(1));
+    }
+
+    @Test
+    public void testB() {
+      assertThat(RETRYER.input(), is(2));
+    }
+
+    @Test
+    public void testC() {
+      assertThat(RETRYER.input(), is(3));
     }
   }
 }
