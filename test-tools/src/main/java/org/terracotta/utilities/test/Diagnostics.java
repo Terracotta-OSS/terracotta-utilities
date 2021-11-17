@@ -322,9 +322,9 @@ public final class Diagnostics {
   public static Thread[] getAllThreads() {
     ThreadGroup root = rootGroup();
     Thread[] threads;
-    int estThreadCount = root.activeCount();
+    int estThreadCount = 1 + root.activeCount();
     int actualThreadCount;
-    while ((actualThreadCount = root.enumerate(threads = new Thread[estThreadCount])) == estThreadCount) {
+    while ((actualThreadCount = root.enumerate(threads = new Thread[estThreadCount])) >= estThreadCount) {
       estThreadCount += 1 + estThreadCount * 20 / 100;
     }
     threads = Arrays.copyOf(threads, actualThreadCount);
