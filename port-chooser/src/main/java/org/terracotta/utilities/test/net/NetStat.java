@@ -1094,15 +1094,39 @@ public class NetStat {
       IPV4(Inet4Address.class, 4, "IPv4", "tcp4") {
         @Override
         public byte[] loopback() {
+          // Use 127.0.0.1 from 127.0.0.0/8 (RFC-6890)
           return new byte[] { 127, 0, 0, 1 };
+        }
+
+        @Override
+        public InetAddress unspecified() {
+          try {
+            // IPv4 lacks "unspecified"; use 0.0.0.0 from 0.0.0.0/8 "this host on this network" (RFC-6890)
+            byte[] address = new byte[IPV4.addressBytes];
+            return InetAddress.getByAddress(address);
+          } catch (UnknownHostException e) {
+            throw new AssertionError("Failed to get InetAddress for 0.0.0.0");
+          }
         }
       },
       IPV6(Inet6Address.class, 16, "IPv6", "tcp6") {
         @Override
         public byte[] loopback() {
-          byte[] loopback = new byte[16];
-          loopback[15] = 1;
+          // Use ::1/128 (RFC-6890)
+          byte[] loopback = new byte[IPV6.addressBytes];
+          loopback[IPV6.addressBytes - 1] = 1;
           return loopback;
+        }
+
+        @Override
+        public InetAddress unspecified() {
+          try {
+            // Using the IPv6 "unspecified" address -- ::/128 (RFC-6890)
+            byte[] address = new byte[IPV6.addressBytes];
+            return InetAddress.getByAddress(address);
+          } catch (UnknownHostException e) {
+            throw new AssertionError("Failed to get InetAddress for ::/128");
+          }
         }
       },
       ;
@@ -1128,6 +1152,13 @@ public class NetStat {
        * @return a byte array for "loopback address
        */
       public abstract byte[] loopback();
+
+      /**
+       * Returns an {@link InetAddress} instance indicating an "unspecified"
+       * (or failed) host address.
+       * @return an "unspecified" address
+       */
+      public abstract InetAddress unspecified();
 
       /**
        * Gets an {@link InetSocketAddress} instance composed of the IP address and port provided.
@@ -1156,17 +1187,22 @@ public class NetStat {
           portNumber = Integer.parseInt(port);
         }
 
+        InetAddress inetAddress;
         try {
-          InetAddress inetAddress;
           if ("*".equals(address)) {
             inetAddress = InetAddress.getByAddress(this.anyLocal());
           } else {
             inetAddress = InetAddress.getByName(address);
           }
-          return new InetSocketAddress(inetAddress, portNumber);
         } catch (UnknownHostException e) {
-          throw new IllegalArgumentException(e);
+          if (LOGGER.isTraceEnabled()) {
+            LOGGER.debug("Failed to convert address={}, port={} to an InetSocketAddress; using \"unspecified\" address", address, port, e);
+          } else {
+            LOGGER.debug("Failed to convert address={}, port={} to an InetSocketAddress; using \"unspecified\" address: {}", address, port, e.toString());
+          }
+          inetAddress = this.unspecified();
         }
+        return new InetSocketAddress(inetAddress, portNumber);
       }
 
       /**
