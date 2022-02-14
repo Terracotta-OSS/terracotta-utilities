@@ -1,0 +1,32 @@
+name: Java CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - master
+      - verify-failure # just to be able to run all these builds on our own fork
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        #os: [ubuntu-latest, macOS-latest, windows-latest]
+        os: [macOS-latest]
+        #java: [8, 11, 17, 18-ea]
+        java: [8, 11]
+        distribution: ['zulu']
+      fail-fast: false
+      max-parallel: 4
+    name: Test JDK ${{ matrix.java }}, ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up JDK
+        uses: actions/setup-java@v2
+        with:
+          java-version: ${{ matrix.java }}
+          distribution: ${{ matrix.distribution }}
+      - name: Test with Maven
+        run: ./mvnw clean verify -V -B -D"maven.artifact.threads=64" -D"org.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn"

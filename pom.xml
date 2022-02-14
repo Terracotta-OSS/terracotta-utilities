@@ -120,8 +120,8 @@
             <showDeprecation>true</showDeprecation>
             <showWarnings>true</showWarnings>
             <compilerArgs>
-              <arg>-Xlint:all</arg>
-              <arg>-Werror</arg>
+<!--              <arg>-Xlint:all</arg>-->
+<!--              <arg>-Werror</arg>-->
             </compilerArgs>
           </configuration>
         </plugin>
@@ -215,6 +215,8 @@
               <exclude>README.md</exclude>
               <exclude>LICENSE-*</exclude>
               <exclude>NOTICE-*</exclude>
+              <exclude>**/*.iml</exclude>
+              <exclude>.github/**/*.yaml</exclude>
               <exclude>src/main/java/org/terracotta/org/junit/**</exclude>
               <exclude>src/test/java/org/terracotta/org/junit/**</exclude>
             </excludes>
@@ -238,16 +240,16 @@
     </pluginManagement>
 
     <plugins>
-      <plugin>
-        <artifactId>maven-toolchains-plugin</artifactId>
-        <executions>
-          <execution>
-            <goals>
-              <goal>toolchain</goal>
-            </goals>
-          </execution>
-        </executions>
-      </plugin>
+<!--      <plugin>-->
+<!--        <artifactId>maven-toolchains-plugin</artifactId>-->
+<!--        <executions>-->
+<!--          <execution>-->
+<!--            <goals>-->
+<!--              <goal>toolchain</goal>-->
+<!--            </goals>-->
+<!--          </execution>-->
+<!--        </executions>-->
+<!--      </plugin>-->
       <plugin>
         <artifactId>maven-enforcer-plugin</artifactId>
         <executions>
