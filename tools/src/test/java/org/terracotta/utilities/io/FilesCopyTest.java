@@ -371,7 +371,7 @@ public class FilesCopyTest extends FilesTestBase {
   @Test
   public void testNullPathSource() throws Exception {
     try {
-      Files.copy(null, top.resolveSibling("other"));
+      Files.copy((Path)null, top.resolveSibling("other"));
       fail("Expecting NullPointerException");
     } catch (NullPointerException e) {
       // expected
