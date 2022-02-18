@@ -23,6 +23,7 @@ import org.slf4j.LoggerFactory;
 import java.io.FilePermission;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.CopyOption;
@@ -42,6 +43,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.FileAttributeView;
@@ -77,6 +79,8 @@ import java.util.function.Supplier;
 import static java.nio.file.Files.isDirectory;
 import static java.nio.file.Files.isSameFile;
 import static java.nio.file.Files.isSymbolicLink;
+import static java.nio.file.Files.newOutputStream;
+import static java.nio.file.Files.readAttributes;
 import static java.nio.file.LinkOption.NOFOLLOW_LINKS;
 import static java.nio.file.StandardCopyOption.COPY_ATTRIBUTES;
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
@@ -127,7 +131,7 @@ import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
  */
 public final class Files {
   private static final Logger LOGGER = LoggerFactory.getLogger(Files.class);
-  protected static final boolean IS_WINDOWS = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("win");
+  private static final boolean IS_WINDOWS = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("win");
 
   private static final Duration MINIMUM_OPERATION_REPEAT_DELAY = Duration.ofMillis(50);
   private static final int MAXIMUM_OPERATION_ATTEMPTS = 10;
@@ -530,7 +534,7 @@ public final class Files {
      *
      * For the time being, we're settling on a pre-check.
      */
-    if (java.nio.file.Files.readAttributes(realPath, BasicFileAttributes.class, NOFOLLOW_LINKS).isDirectory()) {
+    if (readAttributes(realPath, BasicFileAttributes.class, NOFOLLOW_LINKS).isDirectory()) {
       try (DirectoryStream<Path> stream = java.nio.file.Files.newDirectoryStream(realPath)) {
         if (stream.iterator().hasNext()) {
           LOGGER.debug("Failing to delete \"{}\"; directory not empty", realPath);
@@ -692,10 +696,7 @@ public final class Files {
       LOGGER.debug("copy({}, {}, {})", source, target, Arrays.toString(options));
     }
 
-    if (!ACCEPTED_OPTIONS_COPY.containsAll(copyOptions)) {
-      copyOptions.removeAll(ACCEPTED_OPTIONS_COPY);
-      throw new UnsupportedOperationException("Unsupported option(s) specified - " + copyOptions);
-    }
+    checkCopyOptions(ACCEPTED_OPTIONS_COPY, copyOptions);
 
     boolean noFollowLinks = copyOptions.contains(NOFOLLOW_LINKS);
     boolean recursive = copyOptions.contains(ExtendedOption.RECURSIVE);
@@ -794,6 +795,99 @@ public final class Files {
     }
 
     return target;
+  }
+
+  /**
+   * Copies the bytes from an {@link InputStream} to the specified target file.
+   * <p>
+   * Use this {@code copy} method instead of {@link java.nio.file.Files#copy(InputStream, Path, CopyOption...)}
+   * for improved handling of {@link AccessDeniedException} and other select {@link FileSystemException} thrown due to
+   * interference from system tasks.
+   * <p>
+   * As with {@code java.nio.file.Files.copy(InputStream, ...)}, this method fails if {@code target} exists unless
+   * {@link StandardCopyOption#REPLACE_EXISTING REPLACE_EXISTING} is specified.
+   * With {@code REPLACE_EXISTING}, {@code target} is deleted prior to copying the input stream unless
+   * {@code target} is a non-empty directory -- a non-empty directory fails.
+   * <p>
+   * This method handles  a failed target file deletion when {@link StandardCopyOption#REPLACE_EXISTING REPLACE_EXISTING}
+   * is specified.  {@link AccessDeniedException} and other exceptions related to system process interference are retried;
+   * other exceptions are rethrown.
+   * <p>
+   * The caller is responsible for closing the input {@code stream}.
+   * <h3>Notes</h3>
+   * When {@link StandardCopyOption#REPLACE_EXISTING REPLACE_EXISTING} is specified, this method first calls
+   * {@link #delete(Path) delete(target)} before attempting to open an output stream on {@code target}.
+   * Because of this, there is a race window between deleting the target and opening target for output during
+   * which another process may create a file or directory named as {@code target}.  Handling of other process
+   * interference and pending deletion is handled during delete but no interference detection is performed while
+   * opening target for output -- interference at this time may result in an {@link AccessDeniedException}
+   * or another exception being thrown.
+   * @param stream the {@code InputStream} to be copied to {@code target}
+   * @param target the path of the file into which the {@code InputStream} is written
+   * @param options {@link StandardCopyOption#REPLACE_EXISTING REPLACE_EXISTING} can be used to
+   *    delete {@code target} if it exists; other options are not supported
+   * @return the number of bytes copied
+   * @throws DirectoryNotEmptyException if {@code target} is a non-empty directory and
+   *          {@link StandardCopyOption#REPLACE_EXISTING REPLACE_EXISTING} is specified
+   * @throws FileAlreadyExistsException if {@code target} exists and
+   *          {@link StandardCopyOption#REPLACE_EXISTING REPLACE_EXISTING} is not specified
+   * @throws IOException if the copy operation fails
+   * @throws NullPointerException if {@code stream} or {@code target} is null
+   * @throws UnsupportedOperationException if {@code options} contains an unsupported value
+   * @throws SecurityException if permission to access the target file/directory is not sufficient
+   * @see java.nio.file.Files#copy(InputStream, Path, CopyOption...)
+   */
+  public static long copy(InputStream stream, Path target, CopyOption... options) throws IOException {
+    Objects.requireNonNull(stream, "stream must be non-null");
+    Objects.requireNonNull(target, "target must be non-null");
+
+    Set<CopyOption> copyOptions = new LinkedHashSet<>(Arrays.asList(options));
+    checkCopyOptions(EnumSet.of(REPLACE_EXISTING), copyOptions);
+
+    boolean replace = copyOptions.contains(REPLACE_EXISTING);
+
+    Path resolvedTarget = target.toAbsolutePath();
+
+    if (LOGGER.isDebugEnabled()) {
+      LOGGER.debug("copy(InputStream, {}, {})", resolvedTarget, Arrays.toString(options));
+    }
+
+    SecurityManager securityManager = System.getSecurityManager();
+    if (securityManager != null) {
+      securityManager.checkPermission(new FilePermission(resolvedTarget.toString(), "read,write" + (replace ? ",delete" : "")));
+    }
+
+    /*
+     * An attempt to open an OutputStream on a target that is a directory, empty or not, results in
+     * an AccessDeniedException (at least on Windows) so we need to delete a non-empty directory target
+     * _before_ attempting to open a stream on the target.  That leaves an unavoidable race window
+     * between the deletion and the stream open resulting in the possibility of fault on open.
+     *
+     * We also delete a file target being replaced to avoid AccessDeniedException caused by OS process
+     * interference during open.  This is subject to the same race window.
+     */
+    if (replace) {
+      // Throws a DirectoryNotEmptyException if a directory is not empty ...
+      deleteIfExists(resolvedTarget);
+    } else if (java.nio.file.Files.exists(resolvedTarget, NOFOLLOW_LINKS)) {
+      throw new FileAlreadyExistsException(resolvedTarget.toString());
+    }
+
+    /*
+     * At this point, an AccessDeniedException from an existing directory/file target should not be a
+     * consideration.  AccessDeniedException resulting from OS process interference is not expected
+     * to be thrown from newOutputStream so it is not retried.
+     */
+    try (OutputStream targetStream = newOutputStream(resolvedTarget, StandardOpenOption.WRITE, StandardOpenOption.CREATE_NEW)) {
+      long byteCount = 0;
+      byte[] buffer = new byte[8196];
+      int bytesRead;
+      while ((bytesRead = stream.read(buffer)) > 0) {
+        targetStream.write(buffer, 0, bytesRead);
+        byteCount += bytesRead;
+      }
+      return byteCount;
+    }
   }
 
   /**
@@ -1132,6 +1226,21 @@ public final class Files {
       } else {
         return nominalDelay.toNanos();
       }
+    }
+  }
+
+  /**
+   * Verifies that only <i>accepted</i> {@link CopyOption}s have been specified.
+   * @param acceptedOptions the set of {@code CopyOption} valid instances
+   * @param specifiedOptions the set of {@code CopyOption} instances to check
+   * @throws UnsupportedOperationException if {@code specifiedOptions} contains a value not in {@code acceptedOptions}
+   */
+  private static void checkCopyOptions(Set<? extends CopyOption> acceptedOptions, Set<? extends CopyOption> specifiedOptions)
+      throws UnsupportedOperationException {
+    if (!acceptedOptions.containsAll(specifiedOptions)) {
+      Set<CopyOption> invalidOptions = new LinkedHashSet<>(specifiedOptions);
+      invalidOptions.removeAll(acceptedOptions);
+      throw new UnsupportedOperationException("Unsupported option(s) specified - " + invalidOptions);
     }
   }
 

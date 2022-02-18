@@ -70,6 +70,20 @@
     </dependency>
   </dependencies>
 
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.rat</groupId>
+        <artifactId>apache-rat-plugin</artifactId>
+        <configuration>
+          <excludes>
+            <exclude>src/test/resources/De_finibus_bonorum_et_malorum_Liber_Primus.txt</exclude>
+          </excludes>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+
   <scm>
     <connection>scm:git:https://github.com/terracotta-oss/terracotta-utilities.git</connection>
     <developerConnection>scm:git:git@github.com:terracotta-oss/terracotta-utilities.git</developerConnection>
