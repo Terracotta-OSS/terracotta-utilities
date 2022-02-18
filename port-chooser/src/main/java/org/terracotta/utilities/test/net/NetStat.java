@@ -30,9 +30,11 @@ import java.text.CharacterIterator;
 import java.text.StringCharacterIterator;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -69,6 +71,7 @@ import static java.util.stream.Collectors.toMap;
  */
 public class NetStat {
   private static final Logger LOGGER = LoggerFactory.getLogger(NetStat.class);
+  private static final AtomicBoolean LSOF_WARNING_EMITTED = new AtomicBoolean(false);
 
   /**
    * Private niladic constructor to prevent instantiation.
@@ -155,6 +158,10 @@ public class NetStat {
      * and augments the {@code lsof} output with output from {@code ps}.  {@code lsof} requires
      * elevated privileges to see all ports and executed under the control of {@code sudo} with
      * the password prompt suppressed.
+     * <p>
+     * On Linux implementations which have {@code sudo} and {@code lsof} but do not have full
+     * representation of the network stack in the {@code /proc} filesystem, the {@link #netstat()}
+     * method will return an <i>empty</i> list.
      */
     LINUX("linux") {
       @Override
@@ -165,24 +172,63 @@ public class NetStat {
         try {
           busyPorts = runCommand(sudoLsof, NetStat::parseLsof);
         } catch (HostExecutionException e) {
-          String message = "\n" +
-              "\n********************************************************************************" +
-              "\nObtaining a full set of in-use TCP ports requires use of 'sudo' to execute" +
-              "\n'lsof'; add sudoers permissions to allow this.  For example, add a line like the" +
-              "\nfollowing to the bottom of the '/etc/sudoers' file (using 'sudo visudo'):" +
-              "\n    %sudo   ALL=NOPASSWD: /usr/bin/lsof" +
-              "\nEnsure an appropriate group or username is used in place of '%sudo' and the" +
-              "\ncorrect path to 'lsof' is used." +
-              "\n********************************************************************************" +
-              "\n";
-          LOGGER.warn(message, e);
-          try {
-            busyPorts = runCommand(LSOF_COMMAND, NetStat::parseLsof);
-          } catch (Exception ex) {
-            HostExecutionException hostExecutionException =
-                new HostExecutionException("Failed to obtain active TCP ports using 'lsof'" + message, ex);
-            hostExecutionException.addSuppressed(e);
-            throw hostExecutionException;
+          /*
+           * 'lsof', if instances of the targeted file handle -- in this case, a TCP port -- are not found,
+           * returns no output and an exit code of 1.  'sudo', if there is a fault attempting to execute
+           * 'lsof', returns an exit code of 1 but _generally_ emits a message.  So, an exit code of 1
+           * with NO output will be interpreted, not as a failure, but an absence of detectable ports.
+           */
+          if (e.exitCode() == 1 && e.output().isEmpty()) {
+            // No detected ports
+            LOGGER.warn("'lsof' returned no active TCP ports; cannot determine in-use TCP ports: {}", e.getMessage());
+            return Collections.emptyList();
+          } else {
+            /*
+             * Failed to run 'sudo ... lsof'; emit notification of the potential problem.
+             */
+            if (LSOF_WARNING_EMITTED.compareAndSet(false, true)) {
+              String message = "\n" +
+                  "\n********************************************************************************" +
+                  "\nObtaining a full set of in-use TCP ports requires use of 'sudo' to execute" +
+                  "\n'lsof'; add sudoers permissions to allow this.  For example, add a line like the" +
+                  "\nfollowing to the bottom of the '/etc/sudoers' file (using 'sudo visudo'):" +
+                  "\n    %sudo   ALL=NOPASSWD: /usr/bin/lsof" +
+                  "\nEnsure an appropriate group or username is used in place of '%sudo' and the" +
+                  "\ncorrect path to 'lsof' is used." +
+                  "\n" +
+                  "\nNote: Both 'sudo' and 'lsof' must be accessible from PATH." +
+                  "\n    PATH=" + System.getenv("PATH") +
+                  "\n********************************************************************************" +
+                  "\n";
+              if (LOGGER.isDebugEnabled()) {
+                LOGGER.warn("Failed to run elevated `lsof` command; cannot obtain all active TCP ports using 'sudo ... lsof'{}", message, e);
+              } else {
+                LOGGER.warn("Failed to run elevated `lsof` command; cannot obtain all active TCP ports using 'sudo ... lsof'{}{}", message, e.getMessage());
+              }
+            } else {
+              LOGGER.warn("Failed to run elevated `lsof` command; cannot obtain all active TCP ports using 'sudo ... lsof': {}", e.getMessage());
+            }
+
+            /*
+             * Attempt 'lsof' command without 'sudo'.
+             */
+            LOGGER.warn("Attempting {} without 'sudo' elevation; ports owned by other users may be omitted", Arrays.toString(LSOF_COMMAND));
+            try {
+              busyPorts = runCommand(LSOF_COMMAND, NetStat::parseLsof);
+            } catch (Exception ex) {
+              if ((ex instanceof HostExecutionException)) {
+                HostExecutionException hex = (HostExecutionException)ex;
+                if (hex.exitCode() == 1 && hex.output().isEmpty()) {
+                  LOGGER.warn("'lsof' returned no active TCP ports; cannot determine in-use TCP ports: {}", hex.getMessage());
+                  return Collections.emptyList();
+                }
+              }
+              LOGGER.error("Failed to run non-elevated 'lsof' command; cannot determine in-use TCP ports: {}", ex.getMessage());
+              HostExecutionException hostExecutionException =
+                  new HostExecutionException("Failed to obtain active TCP ports using 'lsof'", ex);
+              hostExecutionException.addSuppressed(e);
+              throw hostExecutionException;
+            }
           }
         }
 
@@ -263,7 +309,7 @@ public class NetStat {
       try {
         result = Shell.execute(Shell.Encoding.CHARSET, command);
       } catch (IOException e) {
-        throw new HostExecutionException("Failed to run command: " + Arrays.toString(command), e);
+        throw new HostExecutionException(Arrays.toString(command), null, e);
       }
 
       if (result.exitCode() == 0) {
@@ -273,9 +319,7 @@ public class NetStat {
         }
         return conversion.apply(result.lines().stream());
       } else {
-        String detail = "\n    " + String.join("\n    ", result.lines());
-        throw new HostExecutionException("Failed to run command: " + Arrays.toString(command) +
-            "; rc=" + result.exitCode() + detail);
+        throw new HostExecutionException(Arrays.toString(command), result);
       }
     }
   }
@@ -1281,12 +1325,46 @@ public class NetStat {
   public static final class HostExecutionException extends IOException {
     private static final long serialVersionUID = 3134255439257149986L;
 
-    public HostExecutionException(String message) {
-      super(message);
-    }
+    private final Shell.Result result;
 
     public HostExecutionException(String message, Throwable cause) {
       super(message, cause);
+      this.result = null;
+    }
+
+    public HostExecutionException(String command, Shell.Result result, Throwable cause) {
+      super(message(command, result), cause);
+      this.result = result;
+    }
+
+    public HostExecutionException(String command, Shell.Result result) {
+      super(message(command, result));
+      this.result = result;
+    }
+
+    private static String message(String command, Shell.Result result) {
+      String messageBase = "Failed to run command: " + command;
+      if (null == result) {
+        return messageBase;
+      } else {
+        return messageBase + "; rc=" + result.exitCode() + ("\n    " + String.join("\n    ", result.lines()));
+      }
+    }
+
+    public int exitCode() {
+      if (result != null) {
+        return result.exitCode();
+      } else {
+        return -1;
+      }
+    }
+
+    public List<String> output() {
+      if (result != null) {
+        return result.lines();
+      } else {
+        return Collections.emptyList();
+      }
     }
   }
 }

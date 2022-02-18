@@ -23,11 +23,15 @@ import java.net.ServerSocket;
 import java.util.List;
 
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assume.assumeTrue;
 
 public class NetStatTest {
 
   @Test
   public void testInfo() throws IOException {
+    // This test requires a properly functioning 'sudo --non-interactive -- lsof ...' on Linux
+    assumeTrue("'sudo --non-interactive -- lsof -iTCP not available", TestSupport.sudoLsofWorks());
+
     try (PortManager.PortRef portRef = PortManager.getInstance().reservePort()) {
       try (ServerSocket openSocket = new ServerSocket(portRef.port())) {
         List<NetStat.BusyPort> busyPorts = NetStat.info();
