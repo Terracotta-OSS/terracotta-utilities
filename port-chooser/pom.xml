@@ -80,6 +80,53 @@
     </dependency>
   </dependencies>
 
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <executions>
+          <execution>
+            <!-- Repeat tests using IPv4 preference -->
+            <id>IPv4_base</id>
+            <configuration>
+              <systemPropertyVariables>
+                <java.net.preferIPv4Stack>true</java.net.preferIPv4Stack>
+                <org.terracotta.disablePortReleaseCheck>false</org.terracotta.disablePortReleaseCheck>
+              </systemPropertyVariables>
+              <includes>
+                <include>org.terracotta.utilities.test.net.*Test</include>
+              </includes>
+              <excludes>
+                <!-- Single test run below. -->
+                <exclude>org.terracotta.utilities.test.net.PortManagerTest</exclude>
+              </excludes>
+            </configuration>
+            <phase>test</phase>
+            <goals>
+              <goal>test</goal>
+            </goals>
+          </execution>
+          <execution>
+            <!-- Repeat tests using IPv4 preference - single test ouf of long-running suite -->
+            <id>IPv4_A</id>
+            <configuration>
+              <systemPropertyVariables>
+                <java.net.preferIPv4Stack>true</java.net.preferIPv4Stack>
+                <org.terracotta.disablePortReleaseCheck>false</org.terracotta.disablePortReleaseCheck>
+              </systemPropertyVariables>
+              <test>org.terracotta.utilities.test.net.PortManagerTest#testReleaseCheckEnabled</test>
+            </configuration>
+            <phase>test</phase>
+            <goals>
+              <goal>test</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+
   <scm>
     <connection>scm:git:https://github.com/terracotta-oss/terracotta-utilities.git</connection>
     <developerConnection>scm:git:git@github.com:terracotta-oss/terracotta-utilities.git</developerConnection>
