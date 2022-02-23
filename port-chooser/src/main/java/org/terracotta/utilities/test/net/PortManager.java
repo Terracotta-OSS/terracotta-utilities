@@ -190,6 +190,9 @@ public class PortManager {
    * the {@link #reserve(int)} method may be used to attempt to allocate the port.  The port
    * may also be returned from the {@link #reservePort()} and {@link #reservePorts(int)} methods.
    * @param port the port number to test
+   * @return {@code true} if {@code port} may be reserved using {@link #reserve(int)}; {@code false}
+   *    if {@code port} is not a reservable port.  A {@code true} result is <b>not</b> an indication
+   *    that {@code port} is currently available to be reserved.
    * @throws IllegalArgumentException if {@code port} is not between 0 and
    *    {@value #MAXIMUM_PORT_NUMBER} (inclusive)
    */
@@ -507,11 +510,16 @@ public class PortManager {
    */
   private void diagnosticReleaseCheck(int port) {
     if (!Boolean.getBoolean(DISABLE_PORT_RELEASE_CHECK_PROPERTY)) {
+      boolean disableCheck = false;
       try {
         List<NetStat.BusyPort> collisions = NetStat.info().stream()
             .filter(p -> p.localEndpoint().getPort() == port)
             .collect(toList());
-        if (!collisions.isEmpty()) {
+        if (collisions.isEmpty()) {
+          // An empty list is unusual and not likely to become non-empty on subsequent calls
+          LOGGER.warn("No busy port information obtained to verify release of port {}", port);
+          disableCheck = true;
+        } else {
           LOGGER.error("Port {} being released to PortManager is in use by the following:\n{}",
               port, collisions.stream()
                   .map(NetStat.BusyPort::toString)
@@ -520,6 +528,10 @@ public class PortManager {
         }
       } catch (RuntimeException e) {
         LOGGER.warn("Unable to obtain busy port information to verify release of port {}", port, e);
+        disableCheck = true;
+      }
+
+      if (disableCheck) {
         try {
           AccessController.doPrivileged(
               (PrivilegedAction<String>)() -> System.setProperty(DISABLE_PORT_RELEASE_CHECK_PROPERTY, "true"));
@@ -527,6 +539,7 @@ public class PortManager {
         } catch (SecurityException exception) {
           LOGGER.debug("Failed to disable further use of diagnostic busy port check", exception);
         }
+
       }
     }
   }

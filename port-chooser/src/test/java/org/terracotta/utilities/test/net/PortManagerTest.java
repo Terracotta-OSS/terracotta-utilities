@@ -55,6 +55,7 @@ import static org.hamcrest.Matchers.sameInstance;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assume.assumeTrue;
 import static org.terracotta.utilities.test.matchers.Eventually.within;
 import static org.terracotta.utilities.test.matchers.ThrowsMatcher.threw;
 
@@ -311,6 +312,9 @@ public class PortManagerTest {
   @SuppressWarnings("try")
   @Test
   public void testReleaseCheckEnabled() throws IOException {
+    // This test requires a properly functioning 'sudo --non-interactive -- lsof ...' on Linux
+    assumeTrue("'sudo --non-interactive -- lsof -iTCP not available", TestSupport.sudoLsofWorks());
+
     try (ListAppender appender = new ListAppender(LoggerFactory.getLogger(PortManager.class), "WARN")) {
       PortManager.PortRef portRef = portManager.reservePort();
       int port = portRef.port();
