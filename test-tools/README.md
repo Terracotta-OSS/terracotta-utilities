@@ -19,5 +19,8 @@ by `LICENSE-junit.txt` found at <https://raw.githubusercontent.com/junit-team/ju
 `1b683f4ec07bcfa40149f086d32240f805487e66`, tag `r4.13.1`) were lifted to pick up changes related to
 the resolution of CVE-2020-15250.
 
+* A local update is made to `org.terracotta.org.junit.rules.TemporaryFolderUsageTest` to avoid a test failure 
+when tests are run in a Docker container (during CI) running as root.
+
 **NOTE:** To limit changes to the files obtained from the JUnit code base to the absolute minimum, 
 the Terracotta copyright header is intentionally omitted and SpotBugs/FindBugs is intentionally suppressed.
