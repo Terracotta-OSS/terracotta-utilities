@@ -1,6 +1,7 @@
 package org.terracotta.org.junit.rules;
 
 import org.junit.After;
+import org.junit.AssumptionViolatedException;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -102,9 +103,14 @@ public class TemporaryFolderUsageTest {
         assumeTrue("Could not make folder " + tempFolder.getRoot() + " read only.",
                 tempFolder.getRoot().setReadOnly());
 
-        thrown.expect(IOException.class);
-        thrown.expectMessage("could not create a folder with the path 'level1'");
-        tempFolder.newFolder("level1");
+//        thrown.expect(IOException.class);
+//        thrown.expectMessage("could not create a folder with the path 'level1'");
+        try {
+            tempFolder.newFolder("level1");
+            throw new AssumptionViolatedException("Folder creation successful in read-only directory; super-privileged user likely");
+        } catch (IOException e) {
+            assertThat(e.getMessage(), is("could not create a folder with the path 'level1'"));
+        }
     }
     
     @Test
