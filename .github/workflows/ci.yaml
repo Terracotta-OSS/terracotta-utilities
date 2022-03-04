@@ -35,6 +35,7 @@ jobs:
       - name: Test with Maven
         run: ./mvnw clean verify -V -B "-Dmaven.artifact.threads=64" "-Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn" -DskipToolchain "-Djava.version=${{matrix.java}}"
       - name: Upload Test Results
+        if: always()
         uses: actions/upload-artifact@v2
         with:
           name: Test Results (container centos ${{matrix.distribution}}-${{matrix.java}} as root)
@@ -70,6 +71,7 @@ jobs:
         # Details: https://bugs.openjdk.java.net/browse/JDK-8193433
         run: export MAVEN_OPTS=-Duser.home=$HOME && export JAVA_OPTS=-Duser.home=$HOME && ./mvnw clean verify -V -B "-Dmaven.artifact.threads=64" "-Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn" -DskipToolchain "-Djava.version=${{matrix.java}}"
       - name: Upload Test Results
+        if: always()
         uses: actions/upload-artifact@v2
         with:
           name: Test Results (container centos ${{matrix.distribution}}-${{matrix.java}} as user)
@@ -99,6 +101,7 @@ jobs:
       - name: Test with Maven
         run: ./mvnw clean verify -V -B "-Dmaven.artifact.threads=64" "-Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn" -DskipToolchain "-Djava.version=${{matrix.java}}"
       - name: Upload Test Results
+        if: always()
         uses: actions/upload-artifact@v2
         with:
           name: Test Results (${{matrix.os}} ${{matrix.distribution}}-${{matrix.java}})
@@ -109,6 +112,7 @@ jobs:
     name: "Publish Tests Results"
     needs: [ with-container-root, with-container-user, without-container ]
     runs-on: ubuntu-latest
+    if: always()
     steps:
       - name: Download Artifacts
         uses: actions/download-artifact@v2
