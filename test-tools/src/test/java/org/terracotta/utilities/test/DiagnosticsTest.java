@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.BrokenBarrierException;
@@ -37,6 +38,7 @@ import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.startsWith;
 import static org.junit.Assert.*;
+import static org.terracotta.utilities.test.matchers.Eventually.*;
 
 /**
  * Rudimentary tests for {@link Diagnostics} methods.
@@ -56,6 +58,7 @@ public class DiagnosticsTest {
       }, "Blocked Thread");
       blockedThread.setDaemon(true);
       blockedThread.start();
+      assertThat(barrier::getNumberWaiting, within(Duration.ofSeconds(30)).is(1));  // await barrier arrival
 
       Thread terminatedThread = new Thread(() -> {}, "Terminated Thread");
       terminatedThread.setDaemon(true);
