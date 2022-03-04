@@ -11,6 +11,16 @@ on:
       - master
       - ga # required at the moment until this PR is merged, to verify it works in my fork. Can be removed after once GA build integration is finished.
 jobs:
+  event_file:
+    name: "Publish Github Event Information"
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - name: Upload
+        uses: actions/upload-artifact@v2
+        with:
+          name: Event File
+          path: ${{ github.event_path }}
   with-container-root:
     # uncomment to disable this job
     #if: ${{ false }}
@@ -108,24 +118,15 @@ jobs:
           path: |
             **/target/surefire-reports/**
             **/target/rat.txt
-  event_file:
-    name: "Event File"
-    runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'pull_request' }}
-    steps:
-      - name: Upload
-        uses: actions/upload-artifact@v2
-        with:
-          name: Event File
-          path: ${{ github.event_path }}
   # this job will publish test results when the build is executed:
   # - either within someone's fork, for a fork's branch
   # - either for master build
   # Actions run on a pull_request event for a fork repository cannot
   # do anything useful like creating check runs or pull request comments
   # as part of the CI script
+  # More info: https://github.com/EnricoMi/publish-unit-test-result-action/blob/v1.20/README.md#support-fork-repositories-and-dependabot-branches
   publish-test-results:
-    name: "Publish Tests Results"
+    name: "Publish Tests Results (non-PR build)"
     needs: [ with-container-root, with-container-user, without-container ]
     runs-on: ubuntu-latest
     if: ${{ github.event_name != 'pull_request' }}
@@ -137,4 +138,7 @@ jobs:
       - name: Publish Test Results
         uses: EnricoMi/publish-unit-test-result-action@v1
         with:
+          report_individual_runs: true
+          comment_mode: update last
+          check_name: Tests Results
           files: "**/target/surefire-reports/**/*.xml"
