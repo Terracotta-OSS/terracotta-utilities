@@ -26,7 +26,6 @@
     <relativePath>..</relativePath>
   </parent>
 
-  <groupId>org.terracotta</groupId>
   <artifactId>terracotta-utilities-port-chooser</artifactId>
   <name>Terracotta Utilities Port Chooser</name>
   <description>Utility classes for TCP port management</description>
@@ -56,13 +55,13 @@
       <scope>test</scope>
     </dependency>
     <dependency>
-      <groupId>junit</groupId>
-      <artifactId>junit</artifactId>
+      <groupId>org.hamcrest</groupId>
+      <artifactId>hamcrest</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>
-      <groupId>org.hamcrest</groupId>
-      <artifactId>hamcrest</artifactId>
+      <groupId>junit</groupId>
+      <artifactId>junit</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>
@@ -73,6 +72,7 @@
     <dependency>
       <groupId>ch.qos.logback</groupId>
       <artifactId>logback-classic</artifactId>
+      <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>com.github.spotbugs</groupId>

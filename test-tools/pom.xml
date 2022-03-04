@@ -26,7 +26,6 @@
     <relativePath>..</relativePath>
   </parent>
 
-  <groupId>org.terracotta</groupId>
   <artifactId>terracotta-utilities-test-tools</artifactId>
   <name>Terracotta Utilities Test Tools</name>
   <description>Utility classes/methods for use in testing</description>
@@ -52,11 +51,6 @@
     <dependency>
       <groupId>org.hamcrest</groupId>
       <artifactId>hamcrest</artifactId>
-      <scope>provided</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.hamcrest</groupId>
-      <artifactId>hamcrest-library</artifactId>
       <scope>provided</scope>
     </dependency>
     <dependency>
