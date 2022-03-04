@@ -17,9 +17,19 @@ package org.terracotta.utilities.test.net;
 
 import org.junit.Test;
 
+import java.util.Random;
+
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class EphemeralPortsTest {
+
+  @Test
+  public void failMe() {
+    if (new Random().nextBoolean()) {
+      fail("Boom!");
+    }
+  }
 
   @Test
   public void test() {
