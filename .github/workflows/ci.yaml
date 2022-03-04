@@ -1,0 +1,120 @@
+name: CI
+on:
+  # allow to manually trigger a build through the Actions tab
+  workflow_dispatch:
+  # trigger build on PR
+  pull_request:
+  # trigger build when a branch is pushed
+  push:
+    # put here a list of branches like master, release/x.y, or any branch name activated for building. This also applies to forks.
+    branches:
+      - master
+      - ga # required at the moment until this PR is merged, to verify it works in my fork. Can be removed after once GA build integration is finished.
+jobs:
+  with-container-root:
+    # uncomment to disable this job
+    #if: ${{ false }}
+    name: Inside container centos ${{matrix.distribution}}-${{matrix.java}} as root
+    runs-on: ubuntu-latest
+    container:
+      image: centos:latest
+    strategy:
+      matrix:
+        java: [ 8, 11 ]
+        distribution: [ zulu ]
+      fail-fast: false
+      max-parallel: 4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Install ${{matrix.distribution}}-${{matrix.java}}
+        uses: actions/setup-java@v2
+        with:
+          java-version: ${{matrix.java}}
+          distribution: ${{matrix.distribution}}
+      - name: Test with Maven
+        run: ./mvnw clean verify -V -B "-Dmaven.artifact.threads=64" "-Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn" -DskipToolchain "-Djava.version=${{matrix.java}}"
+      - name: Upload Test Results
+        uses: actions/upload-artifact@v2
+        with:
+          name: Test Results (container centos ${{matrix.distribution}}-${{matrix.java}} as root)
+          path: |
+            **/target/surefire-reports/**
+            **/target/rat.txt
+  with-container-user:
+    # uncomment to disable this job
+    #if: ${{ false }}
+    name: Inside container centos ${{matrix.distribution}}-${{matrix.java}} as user
+    runs-on: ubuntu-latest
+    container:
+      image: centos:latest
+      options: --user 1001:1001
+    strategy:
+      matrix:
+        java: [ 8, 11 ]
+        distribution: [ zulu ]
+      fail-fast: false
+      max-parallel: 4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Install ${{matrix.distribution}}-${{matrix.java}}
+        uses: actions/setup-java@v2
+        with:
+          java-version: ${{matrix.java}}
+          distribution: ${{matrix.distribution}}
+      - name: Test with Maven
+        # Note: A long-standing JVM bug outputs '?' for System.getProperty("user.home") when "getpwuid" fails at JVM startup.
+        # This issue is impacting any code computing paths based on "user.home"
+        # A widely known workaround is then to pass it manually.
+        # Details: https://bugs.openjdk.java.net/browse/JDK-8193433
+        run: export MAVEN_OPTS=-Duser.home=$HOME && export JAVA_OPTS=-Duser.home=$HOME && ./mvnw clean verify -V -B "-Dmaven.artifact.threads=64" "-Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn" -DskipToolchain "-Djava.version=${{matrix.java}}"
+      - name: Upload Test Results
+        uses: actions/upload-artifact@v2
+        with:
+          name: Test Results (container centos ${{matrix.distribution}}-${{matrix.java}} as user)
+          path: |
+            **/target/surefire-reports/**
+            **/target/rat.txt
+  without-container:
+    # uncomment to disable this job
+    #if: ${{ false }}
+    name: ${{matrix.os}} ${{matrix.distribution}}-${{matrix.java}}
+    runs-on: ${{matrix.os}}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, macOS-latest, windows-latest ]
+        java: [ 8, 11 ]
+        distribution: [ zulu ]
+      fail-fast: false
+      max-parallel: 4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Install ${{matrix.distribution}}-${{matrix.java}}
+        uses: actions/setup-java@v2
+        with:
+          java-version: ${{matrix.java}}
+          distribution: ${{matrix.distribution}}
+      - name: Test with Maven
+        run: ./mvnw clean verify -V -B "-Dmaven.artifact.threads=64" "-Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn" -DskipToolchain "-Djava.version=${{matrix.java}}"
+      - name: Upload Test Results
+        uses: actions/upload-artifact@v2
+        with:
+          name: Test Results (${{matrix.os}} ${{matrix.distribution}}-${{matrix.java}})
+          path: |
+            **/target/surefire-reports/**
+            **/target/rat.txt
+  publish-test-results:
+    name: "Publish Tests Results"
+    needs: [ with-container-root, with-container-user, without-container ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v2
+        with:
+          path: artifacts
+      - name: Publish Test Results
+        uses: EnricoMi/publish-unit-test-result-action@v1
+        with:
+          files: "**/target/surefire-reports/**/*.xml"

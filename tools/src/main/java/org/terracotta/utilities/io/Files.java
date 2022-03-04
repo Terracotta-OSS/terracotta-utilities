@@ -511,6 +511,7 @@ public final class Files {
    * @see java.nio.file.Files#delete(Path)
    * @see java.nio.file.Files#move(Path, Path, CopyOption...)
    */
+  @SuppressFBWarnings("RCN_REDUNDANT_NULLCHECK_WOULD_HAVE_BEEN_A_NPE")
   public static void delete(Path path, Duration renameTimeLimit, Runnable progressHelper) throws IOException {
     Objects.requireNonNull(path, "path must be non-null");
     Objects.requireNonNull(renameTimeLimit, "renameTimeLimit must be non-null");

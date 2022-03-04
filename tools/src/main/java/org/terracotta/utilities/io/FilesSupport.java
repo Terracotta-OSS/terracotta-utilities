@@ -383,7 +383,7 @@ class FilesSupport {
       LOGGER.trace("Lock ended on \"{}\"", file);
     }
 
-    @SuppressFBWarnings("DLS_DEAD_LOCAL_STORE")
+    @SuppressFBWarnings({"DLS_DEAD_LOCAL_STORE", "RCN_REDUNDANT_NULLCHECK_WOULD_HAVE_BEEN_A_NPE"})
     private void holdDirectory(Path dir) {
       LOGGER.trace("Hold on \"{}\" beginning", dir);
       try (DirectoryStream<Path> directoryStream = java.nio.file.Files.newDirectoryStream(dir)) {
