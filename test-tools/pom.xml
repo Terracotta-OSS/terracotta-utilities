@@ -49,6 +49,20 @@
       <artifactId>slf4j-api</artifactId>
     </dependency>
     <dependency>
+      <!-- Dependency needed when ConsoleAppenderCapture is used. -->
+      <groupId>ch.qos.logback</groupId>
+      <artifactId>logback-core</artifactId>
+      <version>${logback.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <!-- Dependency needed when ConsoleAppenderCapture is used. -->
+      <groupId>ch.qos.logback</groupId>
+      <artifactId>logback-classic</artifactId>
+      <version>${logback.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
       <groupId>org.hamcrest</groupId>
       <artifactId>hamcrest</artifactId>
       <scope>provided</scope>
@@ -62,6 +76,28 @@
 
   <build>
     <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>withoutConsole</id>
+            <configuration>
+              <includes>
+                <include>org.terracotta.utilities.test.logging.ConsoleAppenderCaptureNoConsoleTest</include>
+              </includes>
+              <systemPropertyVariables>
+                <logback.configurationFile>noConsoleAppender.xml</logback.configurationFile>
+              </systemPropertyVariables>
+              <reportNameSuffix>noConsoleAppender</reportNameSuffix>
+            </configuration>
+            <phase>test</phase>
+            <goals>
+              <goal>test</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
       <plugin>
         <groupId>com.github.spotbugs</groupId>
         <artifactId>spotbugs-maven-plugin</artifactId>
