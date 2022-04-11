@@ -101,6 +101,7 @@
                 <!-- Single test run below. -->
                 <exclude>org.terracotta.utilities.test.net.PortManagerTest</exclude>
               </excludes>
+              <reportNameSuffix>IPv4_base</reportNameSuffix>
             </configuration>
             <phase>test</phase>
             <goals>
@@ -116,6 +117,7 @@
                 <org.terracotta.disablePortReleaseCheck>false</org.terracotta.disablePortReleaseCheck>
               </systemPropertyVariables>
               <test>org.terracotta.utilities.test.net.PortManagerTest#testReleaseCheckEnabled</test>
+              <reportNameSuffix>IPv4_A</reportNameSuffix>
             </configuration>
             <phase>test</phase>
             <goals>
