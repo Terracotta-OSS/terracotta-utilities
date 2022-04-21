@@ -28,17 +28,21 @@ import org.junit.Test;
 import org.junit.rules.TestName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.slf4j.event.Level;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.BrokenBarrierException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.regex.Pattern;
 
 import static java.util.Spliterator.ORDERED;
@@ -48,11 +52,14 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.allOf;
 import static org.hamcrest.Matchers.arrayContaining;
 import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.containsInRelativeOrder;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.emptyString;
+import static org.hamcrest.Matchers.everyItem;
 import static org.hamcrest.Matchers.hasProperty;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.stringContainsInOrder;
 
@@ -148,6 +155,73 @@ public class ConsoleAppenderCaptureTest {
 
   @SuppressWarnings({ "try" })
   @Test
+  public void testSingleThreadRaw() {
+    String methodName = testName.getMethodName();
+    Logger logger = LoggerFactory.getLogger(methodName);
+
+    try (CloseableResource ignored2 = usingLevel(logger, Level.INFO)) {
+      try (AppenderWrapper ignored1 = new AppenderWrapper(logger, appender)) {
+        try (ConsoleAppenderCapture capture = ConsoleAppenderCapture.capture()) {
+          logger.info("sample line");
+          logger.trace("traced line");
+
+          try (CloseableResource ignored = usingLevel(logger, Level.TRACE)) {
+            logger.trace("another traced line");
+          }
+
+          List<ILoggingEvent> logMessages = capture.getEvents(ConsoleAppenderCapture.Target.STDOUT);
+          assertThat(logMessages, contains(
+              allOf(hasProperty("formattedMessage", containsString("sample line")),
+                  hasProperty("level", is(LogLevel.INFO.logbackLevel))),
+              allOf(hasProperty("formattedMessage", containsString("another traced line")),
+                  hasProperty("level", is(LogLevel.TRACE.logbackLevel)))));
+
+          List<String> errMessages = capture.getMessages(ConsoleAppenderCapture.Target.STDERR);
+          assertThat(errMessages, is(empty()));
+        }
+      }
+    }
+  }
+
+  @SuppressWarnings({ "try" })
+  @Test
+  public void testClear() {
+    String methodName = testName.getMethodName();
+    Logger logger = LoggerFactory.getLogger(methodName);
+
+    try (CloseableResource ignored2 = usingLevel(logger, Level.INFO)) {
+      try (AppenderWrapper ignored1 = new AppenderWrapper(logger, appender)) {
+        try (ConsoleAppenderCapture capture = ConsoleAppenderCapture.capture()) {
+          logger.info("sample line");
+          logger.trace("traced line");
+
+          try (CloseableResource ignored = usingLevel(logger, Level.TRACE)) {
+            logger.trace("another traced line");
+          }
+
+          List<ILoggingEvent> logMessages = capture.getEvents(ConsoleAppenderCapture.Target.STDOUT);
+          assertThat(logMessages, contains(
+              allOf(hasProperty("formattedMessage", containsString("sample line")),
+                  hasProperty("level", is(LogLevel.INFO.logbackLevel))),
+              allOf(hasProperty("formattedMessage", containsString("another traced line")),
+                  hasProperty("level", is(LogLevel.TRACE.logbackLevel)))));
+
+          List<String> errMessages = capture.getMessages(ConsoleAppenderCapture.Target.STDERR);
+          assertThat(errMessages, is(empty()));
+
+          capture.clear(ConsoleAppenderCapture.Target.STDOUT);
+          assertThat(capture.getEvents(ConsoleAppenderCapture.Target.STDOUT), is(empty()));
+
+          logger.info("one more line");
+          assertThat(capture.getEvents(ConsoleAppenderCapture.Target.STDOUT),
+              contains(hasProperty("formattedMessage", is("one more line"))));
+        }
+      }
+    }
+  }
+
+  @SuppressWarnings({ "try" })
+  @Test
   public void testGetMessageAsString() {
     String methodName = testName.getMethodName();
     Logger logger = LoggerFactory.getLogger(methodName);
@@ -182,7 +256,7 @@ public class ConsoleAppenderCaptureTest {
    */
   @SuppressWarnings("try")
   @Test
-  public void testTwoThreads() throws Exception {
+  public void testTwoThreadsIndependent() throws Exception {
     int threadCount = 2;
     String methodName = testName.getMethodName();
     Logger logger = LoggerFactory.getLogger(methodName);
@@ -241,6 +315,203 @@ public class ConsoleAppenderCaptureTest {
 
     } finally {
       executor.shutdownNow();
+    }
+  }
+
+  /**
+   * Tests {@link ConsoleAppenderCapture} with multiple threads all captured by the same
+   * {@link ConsoleAppenderCapture} instance relying on use of
+   * {@link ConsoleAppenderCapture#addSupplementalThread(Thread)}.
+   */
+  @SuppressWarnings("try")
+  @Test
+  public void testTwoThreadsNonInherited() throws Exception {
+    int threadCount = 2;
+    String methodName = testName.getMethodName();
+    String mainThreadName = Thread.currentThread().getName();
+    Logger logger = LoggerFactory.getLogger(methodName);
+    ((ch.qos.logback.classic.Logger)logger).setLevel(LogLevel.INFO.logbackLevel);
+
+    ExecutorService executor = Executors.newFixedThreadPool(threadCount + 1);
+    try (ConsoleAppenderCapture capture = new ConsoleAppenderCapture(methodName)) {
+      try (AppenderWrapper ignored = new AppenderWrapper(logger, appender)) {
+
+        List<Future<?>> trials = new ArrayList<>();
+        Map<String, String> taskToThreadNameMap = new ConcurrentHashMap<>();
+
+        // Add threads for which capture is performed
+        for (int i = 0; i < threadCount; i++) {
+          String taskId = methodName + i;
+          logger.info("Creating worker {}", taskId);
+          trials.add(executor.submit(() -> {
+            Thread currentThread = Thread.currentThread();
+            taskToThreadNameMap.put(taskId, currentThread.getName());
+            capture.addSupplementalThread(currentThread);
+            try {
+              logger.info("Task {} info message", taskId);
+              logger.debug("Task {} debug message", taskId);
+              logger.info("Task {} another info message", taskId);
+            } finally {
+              capture.removeSupplementalThread(currentThread);
+              logger.info("Task {} message following removal", taskId);
+            }
+          }));
+        }
+
+        // Add a thread for which capture is *NOT* performed
+        {
+          String taskId = methodName + threadCount;
+          logger.info("Creating worker {}", taskId);
+          trials.add(executor.submit(() -> {
+            taskToThreadNameMap.put(taskId, Thread.currentThread().getName());
+            logger.info("Task {} info message", taskId);
+            logger.debug("Task {} debug message", taskId);
+            logger.info("Task {} another info message", taskId);
+          }));
+        }
+        logger.info("Finished worker creation");
+
+        for (Future<?> trial : trials) {
+          try {
+            trial.get();
+          } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof Error) {
+              throw ((Error)cause);
+            } else if (cause instanceof RuntimeException) {
+              throw  ((RuntimeException)cause);
+            } else {
+              throw new AssertionError(cause);
+            }
+          }
+        }
+
+        List<ILoggingEvent> loggingEvents = capture.getEvents(ConsoleAppenderCapture.Target.STDOUT);
+        String taskName0 = methodName + 0;
+        String taskName1 = methodName + 1;
+        String taskNameN = methodName + threadCount;
+        assertThat(loggingEvents, allOf(
+            // Messages emitted by main thread
+            containsInRelativeOrder(
+                allOf(hasProperty("threadName", is(mainThreadName)),
+                    hasProperty("formattedMessage", is("Creating worker " + taskName0))),
+                allOf(hasProperty("threadName", is(mainThreadName)),
+                    hasProperty("formattedMessage", is("Creating worker " + taskName1))),
+                allOf(hasProperty("threadName", is(mainThreadName)),
+                    hasProperty("formattedMessage", is("Creating worker " + taskNameN))),
+                allOf(hasProperty("threadName", is(mainThreadName)),
+                    hasProperty("formattedMessage", is("Finished worker creation")))),
+            // Messages emitted by first task thread
+            containsInRelativeOrder(
+                allOf(hasProperty("threadName", is(taskToThreadNameMap.get(taskName0))),
+                    hasProperty("formattedMessage", is("Task " + taskName0 + " info message"))),
+                allOf(hasProperty("threadName", is(taskToThreadNameMap.get(taskName0))),
+                    hasProperty("formattedMessage", is("Task " + taskName0 + " another info message")))),
+            // Messages emitted by second task thread
+            containsInRelativeOrder(
+                allOf(hasProperty("threadName", is(taskToThreadNameMap.get(taskName1))),
+                    hasProperty("formattedMessage", is("Task " + taskName1 + " info message"))),
+                allOf(hasProperty("threadName", is(taskToThreadNameMap.get(taskName1))),
+                    hasProperty("formattedMessage", is("Task " + taskName1 + " another info message"))))
+            )
+        );
+        // No messages captured by third task thread
+        assertThat(loggingEvents, everyItem(hasProperty("threadName",
+            is(not(taskToThreadNameMap.get(taskNameN))))));
+        // No messages _after_ removal of supplementary thread
+        assertThat(loggingEvents, everyItem(hasProperty("formattedMessage",
+            not(containsString("message following removal")))));
+
+      }
+    } finally {
+      executor.shutdownNow();
+    }
+  }
+
+  /**
+   * Tests {@link ConsoleAppenderCapture} with multiple threads all captured by the same
+   * {@link ConsoleAppenderCapture} instance relying on MDC inheritance through
+   * {@link MDC#getCopyOfContextMap()} and {@link MDC#setContextMap(Map)}.
+   */
+  @SuppressWarnings("try")
+  @Test
+  public void testTwoThreadsInherited() throws Exception {
+    int threadCount = 2;
+    String methodName = testName.getMethodName();
+    String mainThreadName = Thread.currentThread().getName();
+    Logger logger = LoggerFactory.getLogger(methodName);
+    ((ch.qos.logback.classic.Logger)logger).setLevel(LogLevel.INFO.logbackLevel);
+
+    try (ConsoleAppenderCapture capture = new ConsoleAppenderCapture(methodName)) {
+      try (AppenderWrapper ignored = new AppenderWrapper(logger, appender)) {
+
+        Map<String, String> mdc = MDC.getCopyOfContextMap();
+
+        ThreadGroup group = new ThreadGroup(methodName);
+
+        List<Future<?>> trials = new ArrayList<>();
+        Map<String, String> taskToThreadNameMap = new ConcurrentHashMap<>();
+
+        for (int i = 0; i < threadCount; i++) {
+          String taskId = methodName + i;
+          logger.info("Creating worker {}", taskId);
+          FutureTask<Void> task = new FutureTask<>(() -> {
+            MDC.setContextMap(mdc);
+            taskToThreadNameMap.put(taskId, Thread.currentThread().getName());
+            logger.info("Task {} info message", taskId);
+            logger.debug("Task {} debug message", taskId);
+            logger.info("Task {} another info message", taskId);
+          }, null);
+          Thread thread = new Thread(group, task, taskId);
+          thread.setDaemon(true);
+          thread.start();
+          trials.add(task);
+        }
+        logger.info("Finished worker creation");
+
+        for (Future<?> trial : trials) {
+          try {
+            trial.get();
+          } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof Error) {
+              throw ((Error)cause);
+            } else if (cause instanceof RuntimeException) {
+              throw  ((RuntimeException)cause);
+            } else {
+              throw new AssertionError(cause);
+            }
+          }
+        }
+
+        List<ILoggingEvent> loggingEvents = capture.getEvents(ConsoleAppenderCapture.Target.STDOUT);
+        String taskName0 = methodName + 0;
+        String taskName1 = methodName + 1;
+        assertThat(loggingEvents, allOf(
+            // Messages emitted by main thread
+            containsInRelativeOrder(
+                allOf(hasProperty("threadName", is(mainThreadName)),
+                    hasProperty("formattedMessage", is("Creating worker " + taskName0))),
+                allOf(hasProperty("threadName", is(mainThreadName)),
+                    hasProperty("formattedMessage", is("Creating worker " + taskName1))),
+                allOf(hasProperty("threadName", is(mainThreadName)),
+                    hasProperty("formattedMessage", is("Finished worker creation")))),
+            // Messages emitted by first task thread
+            containsInRelativeOrder(
+                allOf(hasProperty("threadName", is(taskToThreadNameMap.get(taskName0))),
+                    hasProperty("formattedMessage", is("Task " + taskName0 + " info message"))),
+                allOf(hasProperty("threadName", is(taskToThreadNameMap.get(taskName0))),
+                    hasProperty("formattedMessage", is("Task " + taskName0 + " another info message")))),
+            // Messages emitted by second task thread
+            containsInRelativeOrder(
+                allOf(hasProperty("threadName", is(taskToThreadNameMap.get(taskName1))),
+                    hasProperty("formattedMessage", is("Task " + taskName1 + " info message"))),
+                allOf(hasProperty("threadName", is(taskToThreadNameMap.get(taskName1))),
+                    hasProperty("formattedMessage", is("Task " + taskName1 + " another info message"))))
+            )
+        );
+
+      }
     }
   }
 
