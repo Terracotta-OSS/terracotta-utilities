@@ -18,6 +18,8 @@ package org.terracotta.utilities.test.matchers;
 import org.hamcrest.Matcher;
 import org.junit.Test;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
 import static org.hamcrest.CoreMatchers.instanceOf;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.stringContainsInOrder;
@@ -77,8 +79,28 @@ public class ThrowsMatcherTest {
     } catch (AssertionError e) {
       assertThat(e, hasMessage(stringContainsInOrder(
               "Expected:",  "task that throws an instance of java.lang.IllegalArgumentException",
-              "but:", "was \"Hello World\"")));
+              "but:", "was a java.lang.String (\"Hello World\")")));
 
+    }
+  }
+
+  @Test
+  public void testNonIdempotent() {
+    AtomicInteger count = new AtomicInteger(0);
+    try {
+      assertThat(() -> {
+        int i = count.incrementAndGet();
+        if (i != 2) {
+          throw new IllegalStateException("Unexpected count " + i);
+        }
+      }, threw(instanceOf(IllegalArgumentException.class)));
+      fail("Expecting IllegalArgumentException");
+    } catch (AssertionError e) {
+      assertThat(e, hasMessage(stringContainsInOrder(
+          "Expected:",
+          "instance of java.lang.IllegalArgumentException",
+          "Unexpected count",
+          "1")));
     }
   }
 }
