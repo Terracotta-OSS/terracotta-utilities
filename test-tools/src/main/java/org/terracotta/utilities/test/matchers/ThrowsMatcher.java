@@ -17,14 +17,17 @@ package org.terracotta.utilities.test.matchers;
 
 import org.hamcrest.Description;
 import org.hamcrest.Matcher;
-import org.hamcrest.TypeSafeDiagnosingMatcher;
+import org.hamcrest.TypeSafeMatcher;
 
 /**
  * A matcher of exceptions thrown by executable 'tasks'.
  */
-public class ThrowsMatcher extends TypeSafeDiagnosingMatcher<ThrowsMatcher.Task> {
+public class ThrowsMatcher extends TypeSafeMatcher<ThrowsMatcher.Task> {
+
+  private static final Throwable SENTINEL = new Throwable();
 
   private final Matcher<? extends Throwable> matcher;
+  private Throwable fault = SENTINEL;
 
   /**
    * Constructs a {@link Matcher} of tasks that throw a {@code Throwable} matching {@code matcher}.
@@ -36,18 +39,25 @@ public class ThrowsMatcher extends TypeSafeDiagnosingMatcher<ThrowsMatcher.Task>
   }
 
   @Override
-  protected boolean matchesSafely(Task task, Description mismatch) {
+  protected boolean matchesSafely(Task task) {
     try {
       task.run();
-      mismatch.appendText("the task completed normally");
+      fault = null;
       return false;
     } catch (Throwable t) {
-      if (matcher.matches(t)) {
-        return true;
-      } else {
-        matcher.describeMismatch(t, mismatch.appendText("the thrown "));
-        return false;
-      }
+      fault = t;
+      return matcher.matches(t);
+    }
+  }
+
+  @Override
+  protected void describeMismatchSafely(Task item, Description mismatchDescription) {
+    if (fault == SENTINEL) {
+      throw new IllegalStateException("The task has not been called");
+    } else if (fault == null) {
+      mismatchDescription.appendText("the task completed normally");
+    } else {
+      matcher.describeMismatch(fault, mismatchDescription.appendText("the thrown "));
     }
   }
 
