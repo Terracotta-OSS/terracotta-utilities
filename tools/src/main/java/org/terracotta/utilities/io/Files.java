@@ -97,7 +97,7 @@ import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
  * that rename can fail because the anti-virus or indexing subsystems might have the file
  * temporarily open preventing the rename (or move/delete).
  * <p>
- * Generally speaking, simply retrying the delete or rename is sufficient to get around the
+ * Generally speaking, simply retrying the create, delete, or rename is sufficient to get around the
  * problem but there may be other complications -- for example, if the rename/move needs
  * to relocate the file/directory to another file system root a simple retry becomes
  * potentially burdensome.
@@ -135,7 +135,8 @@ public final class Files {
 
   private static final Duration MINIMUM_OPERATION_REPEAT_DELAY = Duration.ofMillis(50);
   private static final int MAXIMUM_OPERATION_ATTEMPTS = 10;
-  private static final Duration DEFAULT_RENAME_TIME_LIMIT = Duration.ofMillis(2500L);
+  private static final long DEFAULT_OPERATION_TIME_LIMIT_MILLIS = 2500L;
+  private static final Duration DEFAULT_OPERATION_TIME_LIMIT = Duration.ofMillis(DEFAULT_OPERATION_TIME_LIMIT_MILLIS);
 
   /**
    * Specifies the minimum value for the delay in {@link #delete(Path, Duration)},
@@ -144,7 +145,7 @@ public final class Files {
    * @deprecated there is now no minimum time limit for operations
    */
   @Deprecated
-  public static final Duration MINIMUM_TIME_LIMIT = DEFAULT_RENAME_TIME_LIMIT.dividedBy(4L);
+  public static final Duration MINIMUM_TIME_LIMIT = DEFAULT_OPERATION_TIME_LIMIT.dividedBy(4L);
 
   /**
    * Identifies the {@link FileSystemException#getReason()} messages for which file operations that
@@ -201,10 +202,99 @@ public final class Files {
   private Files() { }
 
   /**
+   * Creates a file at the specified path retrying the operation if an
+   * {@link java.nio.file.AccessDeniedException AccessDeniedException} is raised.
+   * <p>
+   * This method uses the default retry time limit of {@value #DEFAULT_OPERATION_TIME_LIMIT_MILLIS} milliseconds.
+   * <p>
+   * A {@link Thread#interrupt()} call does not interrupt the create operation -- the create
+   * process continues until it completes (successfully or with a failure) at which point the
+   * interrupt is re-asserted before control is returned to the caller.
+   *
+   * @param path the path of the file to create
+   * @param attrs optional list of attributed to set when creating the file
+   * @return the path of the created file
+   * @throws FileAlreadyExistsException if a file at {@code path} already exists
+   * @throws AccessDeniedException if access to {@code path} is persistently denied; on Windows,
+   *        this is thrown if {@code path} refers to an existing directory
+   * @throws IOException if an I/O exception occurs
+   * @see java.nio.file.Files#createFile(Path, FileAttribute[])
+   */
+  public static Path createFile(Path path, FileAttribute<?>... attrs) throws IOException {
+    return createFile(path, DEFAULT_OPERATION_TIME_LIMIT, attrs);
+  }
+
+  /**
+   * Creates a file at the specified path retrying the operation if an
+   * {@link AccessDeniedException AccessDeniedException} is raised.
+   * <p>
+   * A {@link Thread#interrupt()} call does not interrupt the create operation -- the create
+   * process continues until it completes (successfully or with a failure) at which point the
+   * interrupt is re-asserted before control is returned to the caller.
+   *
+   * @param path the path of the file to create
+   * @param retryTimeLimit the amount of time permitted for retrying the create
+   * @param attrs optional list of attributed to set when creating the file
+   * @return the path of the created file
+   * @throws FileAlreadyExistsException if a file at {@code path} already exists
+   * @throws AccessDeniedException if access to {@code path} is persistently denied; on Windows,
+   *        this is thrown if {@code path} refers to an existing directory
+   * @throws IOException if an I/O exception occurs
+   * @throws IllegalArgumentException if {@code retryTimeLimit} is negative
+   * @see java.nio.file.Files#createFile(Path, FileAttribute[])
+   */
+  public static Path createFile(Path path, Duration retryTimeLimit, FileAttribute<?>... attrs) throws  IOException {
+    Objects.requireNonNull(path, "path must be non-null");
+    if (Objects.requireNonNull(retryTimeLimit, "retryTimeLimit must be non-null").isNegative()) {
+      throw new IllegalArgumentException("retryTimeLimit must be non-negative");
+    }
+
+    long retryDelay = operationDelay(retryTimeLimit);
+    long startTime = System.nanoTime();
+    long deadline = startTime + retryTimeLimit.toNanos();
+    boolean interrupted = false;
+    try {
+      while (true) {
+        try {
+          return java.nio.file.Files.createFile(path, attrs);
+        } catch (AccessDeniedException e) {
+          /*
+           * AccessDeniedException can be caused by OS interference or an incompletely deleted file and
+           * is expected to be transitory.  Since 'createFile' is NOT equipped to replace a file, the
+           * other interference exceptions are NOT handled.  Unfortunately, AccessDeniedException, and not
+           * FileAlreadyExistsException, is thrown on Windows when 'path' refers to an existing directory.
+           * We're not handling this specially here -- 'createFile' against an existing directory on Windows
+           * will exhaust the AccessDeniedException retry and ultimately throw the AccessDeniedException.
+           */
+          long remainingTime = deadline - System.nanoTime();
+          if (remainingTime <= 0) {
+            throw e;
+          } else {
+            try {
+              TimeUnit.NANOSECONDS.sleep(Math.min(retryDelay, remainingTime));
+            } catch (InterruptedException interruptedException) {
+              // Remember the interrupt and continue attempting to create the file
+              interrupted = true;
+            }
+            if (LOGGER.isTraceEnabled()) {
+              LOGGER.trace("Retrying create of \"{}\"; elapsedTime={}, interrupted={}",
+                  path, Duration.ofNanos(System.nanoTime() - startTime), interrupted);
+            }
+          }
+        }
+      }
+    } finally {
+      if (interrupted) {
+        Thread.currentThread().interrupt();
+      }
+    }
+  }
+
+  /**
    * Rename the file or directory with retry for {@code FileSystemException} instances
    * indicating interference from temporary access by other processes.
    * <p>
-   * This method uses the default time limit for the renaming operation.
+   * This method uses the default retry time limit of {@value #DEFAULT_OPERATION_TIME_LIMIT_MILLIS} milliseconds.
    * <p>
    * A {@link Thread#interrupt()} call does not interrupt the rename operation -- the rename
    * process continues until it completes (successfully or with a failure) at which point the
@@ -224,7 +314,7 @@ public final class Files {
    * @throws SecurityException if permission to access the files/directories involved is not sufficient
    */
   public static Path rename(Path origin, Path target) throws IOException {
-    return rename(origin, target, DEFAULT_RENAME_TIME_LIMIT);
+    return rename(origin, target, DEFAULT_OPERATION_TIME_LIMIT);
   }
 
   /**
@@ -280,7 +370,7 @@ public final class Files {
    *      needs to be done in place of a rename
    * @throws FileSystemException for a retryable exception if the time permitted for rename attempts
    *          and retryable exception handling is exhausted or interrupted
-   * @throws IllegalArgumentException if {@code renameTimeLimit} is not at least twice the operation repeat delay
+   * @throws IllegalArgumentException if {@code renameTimeLimit} is negative
    * @throws IOException if the rename or delete fails
    * @throws NullPointerException if {@code origin}, {@code target}, or {@code renameTimeLimit} is null
    * @throws SecurityException if permission to access the files/directories involved is not sufficient
@@ -308,7 +398,8 @@ public final class Files {
    * anti-virus) and, after renaming, the file is deleted.  Because the file was first renamed, at
    * completion of this method, the path is immediately available for re-creation.
    * <p>
-   * This method uses the default time limit for the renaming operation.
+   * This method uses the default retry time limit of {@value #DEFAULT_OPERATION_TIME_LIMIT_MILLIS} milliseconds
+   * when renaming the path.
    * <p>
    * A {@link Thread#interrupt()} call does not interrupt the delete operation -- the rename/delete
    * process continues until it completes (successfully or with a failure) at which point the
@@ -326,7 +417,7 @@ public final class Files {
    * @see java.nio.file.Files#move(Path, Path, CopyOption...)
    */
   public static void deleteTree(Path path) throws IOException {
-    deleteTree(path, DEFAULT_RENAME_TIME_LIMIT);
+    deleteTree(path, DEFAULT_OPERATION_TIME_LIMIT);
   }
 
   /**
@@ -346,7 +437,7 @@ public final class Files {
    * @param path the file/directory path to delete
    * @param renameTimeLimit the time limit to apply to renaming the file/directory before deletion
    *
-   * @throws IllegalArgumentException if {@code renameTimeLimit} is not at least twice the operation repeat delay
+   * @throws IllegalArgumentException if {@code renameTimeLimit} is negative
    * @throws FileSystemException for a retryable exception if the time permitted for rename attempts
    *          and retryable exception handling is exhausted or interrupted
    * @throws IOException if the tree deletion fails
@@ -387,7 +478,7 @@ public final class Files {
    * @param renameTimeLimit the time limit to apply to renaming the file/directory before deletion
    * @param progressHelper a helper task run between retry attempts
    *
-   * @throws IllegalArgumentException if {@code renameTimeLimit} is not at least twice the operation repeat delay
+   * @throws IllegalArgumentException if {@code renameTimeLimit} is negative
    * @throws FileSystemException for a retryable exception if the time permitted for rename attempts
    *          and retryable exception handling is exhausted or interrupted
    * @throws IOException if the tree deletion fails
@@ -423,7 +514,8 @@ public final class Files {
    * <p>
    * When deleting a directory, the directory must be empty.
    * <p>
-   * This method uses the default time limit for the renaming operation.
+   * This method uses the default retry time limit of {@value #DEFAULT_OPERATION_TIME_LIMIT_MILLIS} milliseconds
+   * when renaming the path.
    * <p>
    * A {@link Thread#interrupt()} call does not interrupt the delete operation -- the rename/delete
    * process continues until it completes (successfully or with a failure) at which point the
@@ -442,7 +534,7 @@ public final class Files {
    * @see java.nio.file.Files#move(Path, Path, CopyOption...)
    */
   public static void delete(Path path) throws IOException {
-    delete(path, DEFAULT_RENAME_TIME_LIMIT);
+    delete(path, DEFAULT_OPERATION_TIME_LIMIT);
   }
 
   /**
@@ -463,7 +555,7 @@ public final class Files {
    * @throws DirectoryNotEmptyException if the directory to delete is not empty
    * @throws FileSystemException for a retryable exception if the time permitted for rename attempts
    *          and retryable exception handling is exhausted or interrupted
-   * @throws IllegalArgumentException if {@code renameTimeLimit} is not at least twice the operation repeat delay
+   * @throws IllegalArgumentException if {@code renameTimeLimit} is negative
    * @throws IOException if deletion failed
    * @throws NullPointerException if {@code path} or {@code renameTimeLimit} is null
    * @throws SecurityException if permission to access the file/directory to delete is not sufficient
@@ -503,7 +595,7 @@ public final class Files {
    * @throws DirectoryNotEmptyException if the directory to delete is not empty
    * @throws FileSystemException for a retryable exception if the time permitted for rename attempts
    *          and retryable exception handling is exhausted or interrupted
-   * @throws IllegalArgumentException if {@code renameTimeLimit} is not at least twice the operation repeat delay
+   * @throws IllegalArgumentException if {@code renameTimeLimit} is negative
    * @throws IOException if deletion failed
    * @throws NullPointerException if {@code path}, {@code renameTimeLimit} is null
    * @throws SecurityException if permission to access the file/directory to delete is not sufficient
@@ -561,6 +653,7 @@ public final class Files {
    * @param path the path of the file to delete
    * @return {@code true} if the file was deleted as the result of this call; {@code false} otherwise
    * @throws IOException if deletion failed
+   * @see #delete(Path)
    */
   public static boolean deleteIfExists(Path path) throws IOException {
     try {
@@ -1001,7 +1094,7 @@ public final class Files {
    *
    * @throws FileSystemException for a retryable exception if the time permitted for rename attempts
    *          and retryable exception handling is exhausted or interrupted
-   * @throws IllegalArgumentException if {@code renameTimeLimit} is not at least twice the operation repeat delay
+   * @throws IllegalArgumentException if {@code renameTimeLimit} is negative
    * @throws IOException if the rename or delete fails
    * @throws SecurityException if permission to access the file/directory to rename/delete is not sufficient
    */
@@ -1097,6 +1190,7 @@ public final class Files {
    *          and retryable exception handling is exhausted or interrupted
    * @throws InvalidPathException if {@code targetNameSupplier} returns a bad path
    * @throws IOException if the rename failed
+   * @throws IllegalArgumentException if {@code renameTimeLimit} is negative
    *
    * @see java.nio.file.Files#move(Path, Path, CopyOption...)
    */
@@ -1132,6 +1226,7 @@ public final class Files {
    *          and retryable exception handling is exhausted or interrupted
    * @throws IllegalArgumentException if {@code renameTimeLimit} is negative
    * @throws IOException if the rename failed
+   * @throws IllegalArgumentException if {@code renameTimeLimit} is negative
    *
    * @see java.nio.file.Files#move(Path, Path, CopyOption...)
    */
@@ -1139,7 +1234,7 @@ public final class Files {
       throws IOException {
 
     if (renameTimeLimit.isNegative()) {
-      throw new IllegalArgumentException("renameTimeLimit must be greater than 0");
+      throw new IllegalArgumentException("renameTimeLimit must be non-negative");
     }
 
     boolean interrupted = Thread.interrupted();
