@@ -509,38 +509,44 @@ public class PortManager {
    * @param port the port to check
    */
   private void diagnosticReleaseCheck(int port) {
-    if (!Boolean.getBoolean(DISABLE_PORT_RELEASE_CHECK_PROPERTY)) {
-      boolean disableCheck = false;
-      try {
-        List<NetStat.BusyPort> collisions = NetStat.info().stream()
+    if (Boolean.getBoolean(DISABLE_PORT_RELEASE_CHECK_PROPERTY)) {
+      LOGGER.info("Port {} release check for disabled by {}=true", port, DISABLE_PORT_RELEASE_CHECK_PROPERTY);
+      return;
+    }
+
+    boolean disableCheck = false;
+    try {
+      List<NetStat.BusyPort> portInfo = NetStat.info();
+      if (portInfo.isEmpty()) {
+        // An empty list is unusual and not likely to become non-empty on subsequent calls
+        LOGGER.warn("No busy port information obtained to verify release of port {}", port);
+        disableCheck = true;
+      } else {
+        List<NetStat.BusyPort> collisions = portInfo.stream()
             .filter(p -> p.localEndpoint().getPort() == port)
             .collect(toList());
-        if (collisions.isEmpty()) {
-          // An empty list is unusual and not likely to become non-empty on subsequent calls
-          LOGGER.warn("No busy port information obtained to verify release of port {}", port);
-          disableCheck = true;
-        } else {
+        if (!collisions.isEmpty()) {
           LOGGER.error("Port {} being released to PortManager is in use by the following:\n{}",
               port, collisions.stream()
                   .map(NetStat.BusyPort::toString)
                   .map(s -> "    " + s)
                   .collect(joining("\n")));
         }
-      } catch (RuntimeException e) {
-        LOGGER.warn("Unable to obtain busy port information to verify release of port {}", port, e);
-        disableCheck = true;
+      }
+    } catch (RuntimeException e) {
+      LOGGER.warn("Unable to obtain busy port information to verify release of port {}", port, e);
+      disableCheck = true;
+    }
+
+    if (disableCheck) {
+      try {
+        AccessController.doPrivileged(
+            (PrivilegedAction<String>)() -> System.setProperty(DISABLE_PORT_RELEASE_CHECK_PROPERTY, "true"));
+        LOGGER.warn("Further use of diagnostic busy port check in this JVM disabled");
+      } catch (SecurityException exception) {
+        LOGGER.debug("Failed to disable further use of diagnostic busy port check", exception);
       }
 
-      if (disableCheck) {
-        try {
-          AccessController.doPrivileged(
-              (PrivilegedAction<String>)() -> System.setProperty(DISABLE_PORT_RELEASE_CHECK_PROPERTY, "true"));
-          LOGGER.warn("Further use of diagnostic busy port check in this JVM disabled");
-        } catch (SecurityException exception) {
-          LOGGER.debug("Failed to disable further use of diagnostic busy port check", exception);
-        }
-
-      }
     }
   }
 
