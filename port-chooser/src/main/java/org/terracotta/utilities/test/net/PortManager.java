@@ -19,6 +19,7 @@ import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.terracotta.utilities.test.net.PortManager.PortRef.CloseOption;
 
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
@@ -41,15 +42,17 @@ import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.IntConsumer;
+import java.util.function.BiConsumer;
 import java.util.function.IntUnaryOperator;
 
 import static java.lang.Integer.toHexString;
@@ -57,6 +60,7 @@ import static java.lang.System.identityHashCode;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.joining;
 import static java.util.stream.Collectors.toList;
+import static org.terracotta.utilities.test.net.PortManager.PortRef.CloseOption.NO_RELEASE_CHECK;
 
 /**
  * Manages TCP port reservation/de-reservation while attempting to avoid
@@ -452,7 +456,7 @@ public class PortManager {
     return null;
   }
 
-  private synchronized void release(int port) {
+  private synchronized void release(int port, Set<CloseOption> options) {
     portMap.clear(port);
     allocatedPorts.remove(port);
     LOGGER.info("Port {} released (JVM-level)", port);
@@ -507,40 +511,51 @@ public class PortManager {
    * if not.  This check is <b>not</b> performed if {@value #DISABLE_PORT_RELEASE_CHECK_PROPERTY}
    * is set to {@code true}.
    * @param port the port to check
+   * @param options the set of {@link CloseOption} members used to influence the release check
    */
-  private void diagnosticReleaseCheck(int port) {
-    if (!Boolean.getBoolean(DISABLE_PORT_RELEASE_CHECK_PROPERTY)) {
-      boolean disableCheck = false;
-      try {
-        List<NetStat.BusyPort> collisions = NetStat.info().stream()
+  private void diagnosticReleaseCheck(int port, Set<CloseOption> options) {
+    if (options.contains(NO_RELEASE_CHECK)) {
+      // Silently return
+      return;
+    }
+    if (Boolean.getBoolean(DISABLE_PORT_RELEASE_CHECK_PROPERTY)) {
+      LOGGER.info("Port {} release check for disabled by {}=true", port, DISABLE_PORT_RELEASE_CHECK_PROPERTY);
+      return;
+    }
+
+    boolean disableCheck = false;
+    try {
+      List<NetStat.BusyPort> portInfo = NetStat.info();
+      if (portInfo.isEmpty()) {
+        // An empty list is unusual and not likely to become non-empty on subsequent calls
+        LOGGER.warn("No busy port information obtained to verify release of port {}", port);
+        disableCheck = true;
+      } else {
+        List<NetStat.BusyPort> collisions = portInfo.stream()
             .filter(p -> p.localEndpoint().getPort() == port)
             .collect(toList());
-        if (collisions.isEmpty()) {
-          // An empty list is unusual and not likely to become non-empty on subsequent calls
-          LOGGER.warn("No busy port information obtained to verify release of port {}", port);
-          disableCheck = true;
-        } else {
+        if (!collisions.isEmpty()) {
           LOGGER.error("Port {} being released to PortManager is in use by the following:\n{}",
               port, collisions.stream()
                   .map(NetStat.BusyPort::toString)
                   .map(s -> "    " + s)
                   .collect(joining("\n")));
         }
-      } catch (RuntimeException e) {
-        LOGGER.warn("Unable to obtain busy port information to verify release of port {}", port, e);
-        disableCheck = true;
+      }
+    } catch (RuntimeException e) {
+      LOGGER.warn("Unable to obtain busy port information to verify release of port {}", port, e);
+      disableCheck = true;
+    }
+
+    if (disableCheck) {
+      try {
+        AccessController.doPrivileged(
+            (PrivilegedAction<String>)() -> System.setProperty(DISABLE_PORT_RELEASE_CHECK_PROPERTY, "true"));
+        LOGGER.warn("Further use of diagnostic busy port check in this JVM disabled");
+      } catch (SecurityException exception) {
+        LOGGER.debug("Failed to disable further use of diagnostic busy port check", exception);
       }
 
-      if (disableCheck) {
-        try {
-          AccessController.doPrivileged(
-              (PrivilegedAction<String>)() -> System.setProperty(DISABLE_PORT_RELEASE_CHECK_PROPERTY, "true"));
-          LOGGER.warn("Further use of diagnostic busy port check in this JVM disabled");
-        } catch (SecurityException exception) {
-          LOGGER.debug("Failed to disable further use of diagnostic busy port check", exception);
-        }
-
-      }
     }
   }
 
@@ -592,7 +607,7 @@ public class PortManager {
    */
   private static class AllocatedPort extends WeakReference<PortRef> {
     private final int port;
-    private final AtomicReference<IntConsumer> closer;
+    private final AtomicReference<BiConsumer<Integer, Set<CloseOption>>> closer;
     private AllocatedPort(PortRef referent, ReferenceQueue<? super PortRef> q) {
       super(referent, q);
       this.port = referent.port();
@@ -601,7 +616,8 @@ public class PortManager {
 
     private void release() {
       try {
-        Optional.ofNullable(this.closer.get()).ifPresent(action -> action.accept(port));
+        Optional.ofNullable(this.closer.get())
+            .ifPresent(action -> action.accept(port, EnumSet.noneOf(CloseOption.class)));
       } catch (Exception ignored) {
       }
     }
@@ -613,7 +629,8 @@ public class PortManager {
    */
   public static class PortRef implements AutoCloseable {
     private final int port;
-    private final AtomicReference<IntConsumer> closers = new AtomicReference<>(port -> {});
+    private final AtomicReference<BiConsumer<Integer, Set<CloseOption>>> closers =
+        new AtomicReference<>((port, options) -> {});
     private final AtomicBoolean closed = new AtomicBoolean();
 
     private PortRef(int port) {
@@ -626,7 +643,7 @@ public class PortManager {
      * number being closed.
      * @param action the action to take to close this {@code PortRef} instance
      */
-    void onClose(IntConsumer action) {
+    void onClose(BiConsumer<Integer, Set<CloseOption>> action) {
       closers.accumulateAndGet(action, PortManager::combine);
     }
 
@@ -634,7 +651,7 @@ public class PortManager {
      * Gets the "closers" {@code AtomicReference} for use during weak-reference release.
      * @return the {@code AtomicReference} instance to call for closing this {@code PortRef}
      */
-    private AtomicReference<IntConsumer> closers() {
+    private AtomicReference<BiConsumer<Integer, Set<CloseOption>>> closers() {
       return closers;
     }
 
@@ -659,33 +676,54 @@ public class PortManager {
      */
     @Override
     public void close() {
+      this.close(EnumSet.noneOf(CloseOption.class));
+    }
+
+    /**
+     * Closes this {@code PortRef} using the options provided.
+     * @param options the set of {@link CloseOption}s to apply to this close call; may be empty but not {@code null}
+     */
+    public void close(Set<CloseOption> options) {
+      requireNonNull(options, "options");
       if (closed.compareAndSet(false, true)) {
-        Optional.ofNullable(closers.getAndSet(null)).ifPresent(action -> action.accept(port));
+        Optional.ofNullable(closers.getAndSet(null)).ifPresent(action -> action.accept(port, options));
       }
+    }
+
+    /**
+     * Options that may be used with {@link #close(Set)}.
+     */
+    public enum CloseOption {
+      /**
+       * Indicates that no busy check should be performed when closing the {@code PortRef} and
+       * releasing a port. This option should be used only when it is known that the port has not
+       * been used and cannot be busy.
+       */
+      NO_RELEASE_CHECK
     }
   }
 
   /**
-   * Combines {@code IntConsumer} instances to run in reverse sequence.
-   * @param a the second {@code IntConsumer} to run
-   * @param b the first {@code IntConsumer} to run
-   * @return a new {@code IntConsumer} running {@code b} then {@code a}
+   * Combines {@code BiConsumer} instances to run in reverse sequence.
+   * @param a the second {@code BiConsumer} to run
+   * @param b the first {@code BiConsumer} to run
+   * @return a new {@code BiConsumer} running {@code b} then {@code a}
    */
-  private static IntConsumer combine(IntConsumer a, IntConsumer b) {
+  private static <T, U> BiConsumer<T, U> combine(BiConsumer<T, U> a, BiConsumer<T, U> b) {
     requireNonNull(a, "a");
     requireNonNull(b, "b");
-    return i -> {
+    return (t, u) -> {
       try {
-        b.accept(i);
+        b.accept(t, u);
       } catch (Throwable t1) {
         try {
-          a.accept(i);
+          a.accept(t, u);
         } catch (Throwable t2) {
           t1.addSuppressed(t2);
         }
         throw t1;
       }
-      a.accept(i);
+      a.accept(t, u);
     };
   }
 

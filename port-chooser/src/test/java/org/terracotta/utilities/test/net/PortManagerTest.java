@@ -33,6 +33,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
@@ -96,7 +97,7 @@ public class PortManagerTest {
     try {
       assertThat(portManager.reserve(reservedPort), is(Optional.empty()));
     } finally {
-      portRef.close();
+      portRef.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK));
     }
 
     // Attempt to directly allocate the just released port
@@ -106,17 +107,18 @@ public class PortManagerTest {
     try {
       assertThat(portRef.port(), is(reservedPort));
     } finally {
-      portRef.close();
+      portRef.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK));
     }
   }
 
   @Test(timeout = 50000)
   public void testMultipleClose() {
     PortManager.PortRef portRef = portManager.reservePort();
-    portRef.close();
-    portRef.close();
+    portRef.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK));
+    portRef.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK));
   }
 
+  @SuppressWarnings({ "UnusedAssignment", "resource" })
   @Test(timeout = 200000)
   public void testDereferencedPortIsReleased() {
     PortManager.PortRef portRef = portManager.reservePort();
@@ -137,7 +139,7 @@ public class PortManagerTest {
       }, within(Duration.ofSeconds(10)).matches(is(notNullValue())));
     } finally {
       if (newRef[0] != null) {
-        newRef[0].close();
+        newRef[0].close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK));
       }
     }
   }
@@ -147,7 +149,7 @@ public class PortManagerTest {
     for (int count : Arrays.asList(1, 2, 4, 8)) {
       List<PortManager.PortRef> portList = portManager.reservePorts(count);
       assertThat(portList, hasSize(count));
-      portList.forEach(PortManager.PortRef::close);
+      portList.forEach(ref -> ref.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK)));
     }
   }
 
@@ -180,7 +182,7 @@ public class PortManagerTest {
 
     } finally {
       if (portRef != null) {
-        portRef.close();
+        portRef.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK));
       }
       portMap.and(portMapCopy);
     }
@@ -216,7 +218,7 @@ public class PortManagerTest {
     try {
       port = portRef.port();
     } finally {
-      portRef.close();
+      portRef.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK));
     }
     assertThat(portManager.getPortRef(port), is(Optional.empty()));
     assertTrue(portRef.isClosed());
@@ -245,6 +247,7 @@ public class PortManagerTest {
     }
   }
 
+  @SuppressWarnings("TryFinallyCanBeTryWithResources")
   @Test
   public void testGetPortRefWhenClosing() {
     PortManager.PortRef portRef = portManager.reservePort();
@@ -256,12 +259,12 @@ public class PortManagerTest {
        * the port is first marked closed then the onClose actions are executed.
        */
       AtomicReference<Optional<PortManager.PortRef>> altPortRef = new AtomicReference<>();
-      portRef.onClose(p -> altPortRef.set(portManager.getPortRef(p)));
+      portRef.onClose((p, o) -> altPortRef.set(portManager.getPortRef(p)));
 
       assertThat(portManager.getPortRef(port).orElseThrow(AssertionError::new), is(sameInstance(portRef)));
 
       assertFalse(portRef.isClosed());
-      portRef.close();
+      portRef.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK));
       assertTrue(portRef.isClosed());
 
       assertThat(altPortRef.get(), is(Optional.empty()));
@@ -291,7 +294,7 @@ public class PortManagerTest {
     int reservablePort = restrictedPorts.nextClearBit(1024);
     try {
       Optional<PortManager.PortRef> portRef = portManager.reserve(reservablePort);
-      portRef.ifPresent(PortManager.PortRef::close);
+      portRef.ifPresent(ref -> ref.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK)));
     } catch (IllegalArgumentException e) {
       throw new AssertionError("portManager.reservePort(" + reservablePort + ") failed", e);
     }
@@ -299,7 +302,7 @@ public class PortManagerTest {
     reservablePort = restrictedPorts.previousClearBit(65535);
     try {
       Optional<PortManager.PortRef> portRef = portManager.reserve(reservablePort);
-      portRef.ifPresent(PortManager.PortRef::close);
+      portRef.ifPresent(ref -> ref.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK)));
     } catch (IllegalArgumentException e) {
       throw new AssertionError("portManager.reservePort(" + reservablePort + ") failed", e);
     }
@@ -391,7 +394,7 @@ public class PortManagerTest {
       } finally {
         if (!complete) {
           attempts++;
-          ports.forEach(PortManager.PortRef::close);
+          ports.forEach(portRef -> portRef.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK)));
           ports.clear();
         }
       }
@@ -403,7 +406,7 @@ public class PortManagerTest {
       assertThat(ports, hasSize(targetPortCount));
       assertThat(attempts, is(lessThan(attemptLimit)));
     } finally {
-      ports.forEach(PortManager.PortRef::close);
+      ports.forEach(portRef -> portRef.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK)));
       ports.clear();
     }
   }
