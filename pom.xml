@@ -38,8 +38,10 @@
     <java.version>1.8</java.version>
     <maven.version>3.6.3</maven.version>
     <spotbugs-annotations.version>4.0.2</spotbugs-annotations.version>
-    <slf4j.version>1.7.25</slf4j.version>
-    <logback.version>1.2.3</logback.version>
+    <slf4j.base.version>1.7.32</slf4j.base.version>
+    <slf4j.range.version>[${slf4j.base.version},1.7.9999)</slf4j.range.version>
+    <logback.base.version>1.2.11</logback.base.version>
+    <logback.range.version>[${logback.base.version},1.2.9999)</logback.range.version>
     <hamcrest.version>2.2</hamcrest.version>
     <mokito.version>3.3.3</mokito.version>
     <junit.version>4.12</junit.version>
@@ -66,13 +68,19 @@
       <dependency>
         <groupId>org.slf4j</groupId>
         <artifactId>slf4j-api</artifactId>
-        <version>${slf4j.version}</version>
+        <version>${slf4j.range.version}</version>
       </dependency>
       <dependency>
         <groupId>ch.qos.logback</groupId>
         <artifactId>logback-classic</artifactId>
-        <version>${logback.version}</version>
+        <version>${logback.range.version}</version>
         <scope>test</scope>
+        <exclusions>
+          <exclusion>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+          </exclusion>
+        </exclusions>
       </dependency>
       <dependency>
         <groupId>org.hamcrest</groupId>
@@ -252,26 +260,19 @@
       </plugin>
       <plugin>
         <artifactId>maven-enforcer-plugin</artifactId>
-        <executions>
-          <execution>
-            <goals>
-              <goal>enforce</goal>
-            </goals>
-            <configuration>
-              <rules>
-                <dependencyConvergence>
-                  <uniqueVersions>true</uniqueVersions>
-                </dependencyConvergence>
-                <requireJavaVersion>
-                  <version>[${java.version},)</version>
-                </requireJavaVersion>
-                <requireMavenVersion>
-                  <version>[${maven.version},)</version>
-                </requireMavenVersion>
-              </rules>
-            </configuration>
-          </execution>
-        </executions>
+        <configuration>
+          <rules>
+            <dependencyConvergence>
+              <uniqueVersions>true</uniqueVersions>
+            </dependencyConvergence>
+            <requireJavaVersion>
+              <version>[${java.version},)</version>
+            </requireJavaVersion>
+            <requireMavenVersion>
+              <version>[${maven.version},)</version>
+            </requireMavenVersion>
+          </rules>
+        </configuration>
       </plugin>
       <plugin>
         <artifactId>maven-source-plugin</artifactId>

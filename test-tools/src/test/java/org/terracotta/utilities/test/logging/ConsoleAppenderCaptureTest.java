@@ -26,6 +26,7 @@ import org.junit.BeforeClass;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TestName;
+import org.slf4j.ILoggerFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -58,6 +59,7 @@ import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.emptyString;
 import static org.hamcrest.Matchers.everyItem;
 import static org.hamcrest.Matchers.hasProperty;
+import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.nullValue;
@@ -78,7 +80,10 @@ public class ConsoleAppenderCaptureTest {
    */
   @BeforeClass
   public static void configureLogger() {
-    LoggerContext loggerContext = (LoggerContext)LoggerFactory.getILoggerFactory();
+    ILoggerFactory iLoggerFactory = LoggerFactory.getILoggerFactory();
+    assertThat("iLoggerFactory is not a LoggerContext; examine 'stderr' for messages from SLF4J",
+        iLoggerFactory, is(instanceOf(LoggerContext.class)));
+    LoggerContext loggerContext = (LoggerContext)iLoggerFactory;
 
     /*
      * Determine if a ConsoleAppender fpr STDOUT is already present in the ROOT logger.  (Tests
