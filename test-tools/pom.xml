@@ -52,14 +52,14 @@
       <!-- Dependency needed when ConsoleAppenderCapture is used. -->
       <groupId>ch.qos.logback</groupId>
       <artifactId>logback-core</artifactId>
-      <version>${logback.version}</version>
+      <version>${logback.range.version}</version>
       <scope>provided</scope>
     </dependency>
     <dependency>
       <!-- Dependency needed when ConsoleAppenderCapture is used. -->
       <groupId>ch.qos.logback</groupId>
       <artifactId>logback-classic</artifactId>
-      <version>${logback.version}</version>
+      <version>${logback.range.version}</version>
       <scope>provided</scope>
     </dependency>
     <dependency>

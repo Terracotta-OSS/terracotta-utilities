@@ -20,6 +20,7 @@ import ch.qos.logback.core.ConsoleAppender;
 
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.slf4j.ILoggerFactory;
 import org.slf4j.LoggerFactory;
 
 import static java.util.Spliterator.ORDERED;
@@ -46,7 +47,10 @@ public class ConsoleAppenderCaptureNoConsoleTest {
    */
   @BeforeClass
   public static void preCondition() {
-    boolean hasConsoleAppender = ((LoggerContext)LoggerFactory.getILoggerFactory()).getLoggerList().stream()
+    ILoggerFactory iLoggerFactory = LoggerFactory.getILoggerFactory();
+    assertThat("iLoggerFactory is not a LoggerContext; examine 'stderr' for messages from SLF4J",
+        iLoggerFactory, is(instanceOf(LoggerContext.class)));
+    boolean hasConsoleAppender = ((LoggerContext)iLoggerFactory).getLoggerList().stream()
         .flatMap(l -> stream(spliteratorUnknownSize(l.iteratorForAppenders(), ORDERED), false))
         .anyMatch(a -> (a instanceof ConsoleAppender));
     assumeFalse("Suppressed -- ConsoleAppender present", hasConsoleAppender);
