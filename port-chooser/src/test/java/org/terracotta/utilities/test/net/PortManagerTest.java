@@ -194,12 +194,12 @@ public class PortManagerTest {
     PortManager.PortRef portRef = portManager.reservePort();
     int port = portRef.port();
     try (ServerSocket ignored = new ServerSocket(port)) {
-      portRef.close();
+      portRef.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK));
       assertThat(portManager.reserve(port), is(Optional.empty()));
     }
     Optional<PortManager.PortRef> optional = portManager.reserve(port);
     assertTrue(optional.isPresent());
-    optional.get().close();
+    optional.get().close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK));
   }
 
   @Test
