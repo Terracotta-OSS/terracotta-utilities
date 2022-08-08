@@ -43,7 +43,7 @@ jobs:
           java-version: ${{matrix.java}}
           distribution: ${{matrix.distribution}}
       - name: Test with Maven
-        run: ./mvnw clean verify -V -B "-Dmaven.artifact.threads=64" "-Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn" -DskipToolchain "-Djava.version=${{matrix.java}}" -Dmaven.javadoc.skip
+        run: ./mvnw clean verify -V -B "-Dmaven.artifact.threads=64" "-Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn" -DskipToolchain "-Djava.version=${{matrix.java}}" "-Dmaven.javadoc.skip"
       - name: Upload Test Results
         if: always()
         uses: actions/upload-artifact@v2
@@ -79,7 +79,7 @@ jobs:
         # This issue is impacting any code computing paths based on "user.home"
         # A widely known workaround is then to pass it manually.
         # Details: https://bugs.openjdk.java.net/browse/JDK-8193433
-        run: export MAVEN_OPTS=-Duser.home=$HOME && export JAVA_OPTS=-Duser.home=$HOME && ./mvnw clean verify -V -B "-Dmaven.artifact.threads=64" "-Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn" -DskipToolchain "-Djava.version=${{matrix.java}}" -Dmaven.javadoc.skip
+        run: export MAVEN_OPTS=-Duser.home=$HOME && export JAVA_OPTS=-Duser.home=$HOME && ./mvnw clean verify -V -B "-Dmaven.artifact.threads=64" "-Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn" -DskipToolchain "-Djava.version=${{matrix.java}}" "-Dmaven.javadoc.skip"
       - name: Upload Test Results
         if: always()
         uses: actions/upload-artifact@v2
@@ -109,7 +109,7 @@ jobs:
           java-version: ${{matrix.java}}
           distribution: ${{matrix.distribution}}
       - name: Test with Maven
-        run: ./mvnw clean verify -V -B "-Dmaven.artifact.threads=64" "-Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn" -DskipToolchain "-Djava.version=${{matrix.java}}" -Dmaven.javadoc.skip
+        run: ./mvnw clean verify -V -B "-Dmaven.artifact.threads=64" "-Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn" -DskipToolchain "-Djava.version=${{matrix.java}}" "-Dmaven.javadoc.skip"
       - name: Upload Test Results
         if: always()
         uses: actions/upload-artifact@v2
