@@ -91,6 +91,10 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <!-- Most tests should run with DISABLE_PORT_RELEASE_CHECK false or unset -->
+          <excludedEnvironmentVariables>DISABLE_PORT_RELEASE_CHECK</excludedEnvironmentVariables>
+        </configuration>
         <executions>
           <execution>
             <!-- Repeat tests using IPv4 preference -->
@@ -115,7 +119,7 @@
             </goals>
           </execution>
           <execution>
-            <!-- Repeat tests using IPv4 preference - single test ouf of long-running suite -->
+            <!-- Repeat tests using IPv4 preference - single test of long-running suite -->
             <id>IPv4_A</id>
             <configuration>
               <systemPropertyVariables>
@@ -124,6 +128,21 @@
               </systemPropertyVariables>
               <test>org.terracotta.utilities.test.net.PortManagerTest#testReleaseCheckEnabled</test>
               <reportNameSuffix>IPv4_A</reportNameSuffix>
+            </configuration>
+            <phase>test</phase>
+            <goals>
+              <goal>test</goal>
+            </goals>
+          </execution>
+          <execution>
+            <!-- Single test for DISABLE_PORT_RELEASE_CHECK=true -->
+            <id>PortCheckDisabled</id>
+            <configuration>
+              <environmentVariables>
+                <DISABLE_PORT_RELEASE_CHECK>true</DISABLE_PORT_RELEASE_CHECK>
+              </environmentVariables>
+              <test>org.terracotta.utilities.test.net.PortManagerTest#testReleaseCheckDisabledEnvironment</test>
+              <reportNameSuffix>PortCheckDisabled</reportNameSuffix>
             </configuration>
             <phase>test</phase>
             <goals>

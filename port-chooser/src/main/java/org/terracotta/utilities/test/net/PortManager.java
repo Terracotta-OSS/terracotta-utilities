@@ -83,8 +83,10 @@ import static org.terracotta.utilities.test.net.PortManager.PortRef.CloseOption.
  * on the system and, on some systems, could be a time-consuming activity.  While the check is
  * intended to identify "outside" interference with ports assigned by {@code PortManager}, it
  * is possible to disable this check by setting the {@value #DISABLE_PORT_RELEASE_CHECK_PROPERTY}
- * property to {@code true}.  The property value is examined each time the release check is
- * performed so the check may be disabled for some tests and left enabled for others.
+ * property or {@value #DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE} environment variable to {@code true}.
+ * The property value is examined each time the release check is
+ * performed so the check may be disabled for some tests and left enabled for others; the environment
+ * variable is only examined when the {@code PortManger} class is loaded.
  */
 public class PortManager {
   /**
@@ -93,7 +95,35 @@ public class PortManager {
    */
   public static final String DISABLE_PORT_RELEASE_CHECK_PROPERTY = "org.terracotta.disablePortReleaseCheck";
 
+  /**
+   * Environment variable checked for disabling the port release check performed at the time a port
+   * obtained from PortManager is returned to PortManger.
+   */
+  public static final String DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE = "DISABLE_PORT_RELEASE_CHECK";
+
   private static final Logger LOGGER = LoggerFactory.getLogger(PortManager.class);
+
+  /**
+   * Reflects the value of the {@value #DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE} environment variable.  If the
+   * environment variable is set to a case-insensitive value of {@code true}, the port release
+   * check will be disabled.
+   * <p>
+   * The value of the environment variable is only checked when this class is loaded; changes to the
+   * environment variable after this class is loaded are not detected.
+   */
+  private static final boolean DISABLE_PORT_RELEASE_CHECK;
+
+  static {
+    boolean disablePortReleaseCheck = false;
+    try {
+      disablePortReleaseCheck = Boolean.parseBoolean(System.getenv(DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE));
+      if (disablePortReleaseCheck) {
+        LOGGER.warn("Port release check disabled by environment variable {}=true", DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE);
+      }
+    } catch (SecurityException ignored) {
+    }
+    DISABLE_PORT_RELEASE_CHECK = disablePortReleaseCheck;
+  }
 
   private static final PortManager INSTANCE = new PortManager();
   static {
@@ -508,13 +538,14 @@ public class PortManager {
 
   /**
    * Checks that the port being released is actually free and emits a detailed log message
-   * if not.  This check is <b>not</b> performed if {@value #DISABLE_PORT_RELEASE_CHECK_PROPERTY}
+   * if not.  This check is <b>not</b> performed if the {@value #DISABLE_PORT_RELEASE_CHECK_PROPERTY}
+   * system property or the {@value #DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE} environment variable
    * is set to {@code true}.
    * @param port the port to check
    * @param options the set of {@link CloseOption} members used to influence the release check
    */
   private void diagnosticReleaseCheck(int port, Set<CloseOption> options) {
-    if (options.contains(NO_RELEASE_CHECK)) {
+    if (DISABLE_PORT_RELEASE_CHECK | options.contains(NO_RELEASE_CHECK)) {
       // Silently return
       return;
     }
