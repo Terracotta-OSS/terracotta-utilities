@@ -24,3 +24,9 @@ This project operates under the following constraints:
     If an artifact on which `test-tools` relies makes a breaking change,
     introduce new artifact containing the breaking components -- not a 
     new version of the `test-tools` artifact. 
+
+## Notes
+
+* While the project is currently designed to produce artifacts operable under Java 8, the complete Javadoc
+  will not be produced unless a Java 11 runtime is used during the build.  (The plugin used to generate
+  diagrams included in the Javadoc requires running under Java 11.)

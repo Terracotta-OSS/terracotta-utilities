@@ -1223,6 +1223,37 @@ public class NetStat {
 
     /**
      * TCP Connection states.
+     * <p>
+     * This class maps the states observed by the utilities used to examine the TCP connections on the
+     * platform to a common form.  Where the state maps to a state described in
+     * <a href="https://datatracker.ietf.org/doc/html/rfc793">RFC-793 Transmission Control Protocol</a>,
+     * that state name is used for the enumeration constant.
+     * <p>
+     * The following diagram shows the usual TCP state transitions.  For a discussion of this diagram,
+     * see <i>RFC-793 Transmission Control Protocol</i> and
+     * <i>TCP/IP Illustrated, Volume 1, 1ed: The Protocols</i> by W. Richard Stevens.
+     * <table summary="TCP State Diagram &amp; Legend">
+     *   <tbody>
+     *     <tr>
+     *       <td><img src="doc-files/tcp_state_diagram.png" alt="TCP State Diagram"></td>
+     *       <td><img src="doc-files/tcp_state_diagram_legend.png" alt="Legend for TCP State Diagram"></td>
+     *     </tr>
+     *   </tbody>
+     * </table>
+     * <ul>
+     *   <li>
+     *     The CLOSE_WAIT and FIN_WAIT_2 states are paired -- one side of the connection will be in CLOSE_WAIT and
+     *     the other in FIN_WAIT_2.  Until the application in CLOSE_WAIT actually <i>closes</i> the connection, the
+     *     connection remains with neither socket endpoint being available for re-use.  (According to (Stevens 1994),
+     *     some TCP implementations will move a socket in FIN_WAIT_2 to CLOSED after 10+ minutes of idle time.)
+     *   </li>
+     *   <li>
+     *     The TIME_WAIT state is applied to a newly closed connection and is used to prevent immediate re-use of
+     *     the socket to allow delivery of potentially delayed packets.  The amount of time the socket remains in
+     *     TIME_WAIT varies by implementation (and potentially configuration) but is commonly 2 minutes.
+     *   </li>
+     * </ul>
+     *
      *
      * <h3>Implementation Notes</h3>
      * <h4>Mac OS X</h4>
@@ -1241,23 +1272,111 @@ public class NetStat {
      * @see <a href="https://raw.githubusercontent.com/apple/darwin-xnu/0a798f6738bc1db01281fc08ae024145e84df927/bsd/netinet/tcp_fsm.h">
      *   apple/darwin-xnu/bsd/netinet/tcp_fsm.h</a>
      * @see <a href="http://newosxbook.com/src.jl?tree=listings&file=netbottom.c"><code>netbottom.c</code> Sources</a>
+     * @see "Stevens, W. Richard (1994) <i>TCP/IP Illustrated, Volume 1, 1ed: The Protocols</i>, Addison-Wesley"
+     * @see <a href="https://datatracker.ietf.org/doc/html/rfc793">RFC-793 Transmission Control Protocol</a>
+     */
+    /*
+     * The following PlantUML diagrams are processed using the com.github.funthomas424242:plantuml-maven-plugin plugin.
+     *
+     * @startuml doc-files/tcp_state_diagram.png
+     * title TCP State Transition Diagram\nAdapted from Stevens, W. Richard (1994) //TCP/IP Illustrated, Volume 1, 1ed: The Protocols//, Addison-Wesley, Figure 18.12, p. 241
+     * hide empty description
+     *
+     * [*] --> CLOSED
+     * LISTEN : //passive open//
+     * SYN_SENT : //active open//
+     * ESTABLISHED : //data transfer state//
+     *
+     * CLOSED -down[#blue,dashed]-> LISTEN : appl: **passive open**\nsend: <nothing>
+     * LISTEN -down[#blue,dashed]-> SYN_RCVD : recv: SYN\nsend: SYN, ACK
+     * LISTEN -down-> SYN_SENT : appl: **send data**\nsend: SYN
+     * CLOSED -down[#blue]-> SYN_SENT : appl: **active open**\nsend: SYN
+     * SYN_RCVD --> LISTEN : recv: RST
+     * SYN_RCVD -down[#blue,dashed]-> ESTABLISHED : recv: ACK\nsend: <nothing>
+     * SYN_SENT -down[#blue]-> ESTABLISHED : recv: SYN, ACK\nsend: ACK
+     * SYN_SENT --> CLOSED : appl: **close**\nor timeout
+     * SYN_SENT -left-> SYN_RCVD : recv: SYN\nsend: SYN, ACK\n//simultaneous open//
+     *
+     * state "//passive close//" as passiveClose {
+     *   ESTABLISHED -right[#blue,dashed]-> CLOSE_WAIT : revc: FIN\nsend: ACK
+     *   CLOSE_WAIT -down[#blue,dashed]-> LAST_ACK : appl: **close**\nsend: FIN
+     *   LAST_ACK -up[#blue]-> CLOSED : recv: ACK\nsend: <nothing>
+     * }
+     *
+     * state "//active close//" as activeClose {
+     *   FIN_WAIT_1 <-down- SYN_RCVD : appl: **close**\nsend: FIN
+     *   FIN_WAIT_1 <-down[#blue]- ESTABLISHED : appl: **close**\nsend: FIN
+     *   FIN_WAIT_1 -down[#blue]-> FIN_WAIT_2 : recv: ACK\nsend: <nothing>
+     *   FIN_WAIT_1 -> CLOSING : recv: FIN\nsend: ACK
+     *   FIN_WAIT_1 -> TIME_WAIT : recv: FIN, ACK\nsend: ACK
+     *   FIN_WAIT_2 -right[#blue]-> TIME_WAIT : recv: FIN\nsend: ACK
+     *   CLOSING -down-> TIME_WAIT : recv: ACK\nsend: <nothing>
+     *   CLOSING : //simultaneous close//
+     *   TIME_WAIT -up[#blue]-> CLOSED
+     *   TIME_WAIT : //2MSL timeout//
+     * }
+     * @enduml
+     *
+     * @startuml doc-files/tcp_state_diagram_legend.png
+     * scale 0.75
+     * state Legend #lightblue {
+     *      !$arrow_length = %string("." + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160))
+     *
+     *     state "normal transition for client" as client {
+     *      [*] -right[#blue]-> [*] : $arrow_length
+     *     }
+     *     --
+     *     state "normal transition for server" as server {
+     *      [*] -right[dashed]-> [*] : $arrow_length
+     *     }
+     *     --
+     *     state "application-initiated state transitions" as appl {
+     *       [*] -right-> [*] : appl: **<operation>**
+     *     }
+     *     --
+     *     state "segment receipt-initiated state transitions" as recv {
+     *       [*] -right-> [*] : recv: <message>
+     *     }
+     *     --
+     *     state "segment sent as a result of state transition" as send {
+     *       [*] -right-> [*] : send: <message>
+     *     }
+     * }
+     * @enduml
+     *
      */
     public enum TcpState {
+      /** Connection state is unknown (MSFT_NetTCPConnection). **/
       UNKNOWN("", 0, "", ""),
+      /** Not connected (RFC-793). **/
       CLOSED("Closed", 1, "Closed", "CLOSED"),
+      /** Awaiting a connection request (RFC-793). **/
       LISTEN("Listen", 2, "Listen", "LISTEN"),
+      /** Awaiting a matching connection request after having sent a connection request (RFC-793). **/
       SYN_SENT("SynSent", 3, "SynSent", "SYN_SENT"),
+      /** Awaiting connection request acknowledgement after having sent and received a connection request (RFC-793). **/
       SYN_RECEIVED("SynReceived", 4, "SynReceived", "SYN_RECV", "SYN_RCVD"),
+      /** An "open" TCP connection over which data may be transferred (RFC-793). **/
       ESTABLISHED("Established", 5, "Established", "ESTABLISHED"),
+      /** Awaiting connection termination request or acknowledgement of sent connection termination request from remote (RFC-793). **/
       FIN_WAIT_1("FinWait1", 6, "FinWait1", "FIN_WAIT_1"),
+      /** Awaiting connection termination request from remote (RFC-793). **/
       FIN_WAIT_2("FinWait2", 7, "FinWait2", "FIN_WAIT_2"),
+      /** Awaiting application-level connection termination (socket close) (RFC-793). **/
       CLOSE_WAIT("CloseWait", 8, "CloseWait", "CLOSE_WAIT"),
+      /** Awaiting connection termination request acknowledgement from remote (RFC-793). **/
       CLOSING("Closing", 9, "Closing", "CLOSING"),
+      /** Awaiting acknowledgement of connection termination request sent to remote (RFC-793). **/
       LAST_ACK("LastAck", 10, "LastAck", "LAST_ACK"),
+      /** Awaiting expiration of TCP implementation-defined timeout before socket of closed connection can be re-used (RFC-793). **/
       TIME_WAIT("TimeWait", 11, "TimeWait", "TIME_WAIT"),
+      /** Indicates the control block representing the TCP connection is being deleted (MSFT_NetTCPConnection). **/
       DELETE_TCB("DeleteTCB",  12, "", ""),
+      /** Awaiting application {@code listen}, {@code connect}, {@code accept}, or {@code close} call following {@code bind} (lsof). **/
       BOUND("Bound", -1, "", "BOUND"),
+      /** Awaiting application {@code close} following a socket/connection error (lsof/Linux). **/
       CLOSE("", -1, "", "CLOSE"),
+      /** Awaiting application {@code bind}, {@code connect},  or {@code close} on socket (lsof).  **/
       IDLE("", -1, "", "IDLE"),
       ;
 
