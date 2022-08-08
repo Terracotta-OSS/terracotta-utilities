@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Terracotta, Inc., a Software AG company.
+ * Copyright 2020-2022 Terracotta, Inc., a Software AG company.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -318,6 +318,10 @@ public class PortManagerTest {
     // This test requires a properly functioning 'sudo --non-interactive -- lsof ...' on Linux
     assumeTrue("'sudo --non-interactive -- lsof -iTCP not available", TestSupport.sudoLsofWorks());
 
+    // This test MUST be run when PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE is false or not specified
+    assertFalse(PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE + " environment variable must be false or not specified",
+        Boolean.parseBoolean(System.getenv(PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE)));
+
     try (ListAppender appender = new ListAppender(LoggerFactory.getLogger(PortManager.class), "WARN")) {
       PortManager.PortRef portRef = portManager.reservePort();
       int port = portRef.port();
@@ -342,6 +346,10 @@ public class PortManagerTest {
   @SuppressWarnings("try")
   @Test
   public void testReleaseCheckDisabled() throws IOException {
+    // This test MUST be run when PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE is false or not specified
+    assertFalse(PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE + " environment variable must be false or not specified",
+        Boolean.parseBoolean(System.getenv(PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE)));
+
     try (ListAppender appender = new ListAppender(LoggerFactory.getLogger(PortManager.class), "WARN")) {
       PortManager.PortRef portRef = portManager.reservePort();
       int port = portRef.port();
@@ -356,6 +364,26 @@ public class PortManagerTest {
             System.setProperty(PortManager.DISABLE_PORT_RELEASE_CHECK_PROPERTY, portReleaseCheck);
           }
         }
+        assertThat(appender.events(), not(hasItem(allOf(
+            hasProperty("level", equalTo(Level.ERROR)),
+            hasProperty("loggerName", equalTo(PortManager.class.getName())),
+            hasProperty("formattedMessage", is(stringContainsInOrder("Port " + port, "state='LISTEN'")))
+        ))));
+      }
+    }
+  }
+
+  @SuppressWarnings("try")
+  @Test
+  public void testReleaseCheckDisabledEnvironment() throws IOException {
+    assumeTrue("Skipped unless " + PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE + " environment variable is true",
+        Boolean.parseBoolean(System.getenv(PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE)));
+
+    try (ListAppender appender = new ListAppender(LoggerFactory.getLogger(PortManager.class), "WARN")) {
+      PortManager.PortRef portRef = portManager.reservePort();
+      int port = portRef.port();
+      try (ServerSocket ignored = new ServerSocket(port)) {
+        portRef.close();
         assertThat(appender.events(), not(hasItem(allOf(
             hasProperty("level", equalTo(Level.ERROR)),
             hasProperty("loggerName", equalTo(PortManager.class.getName())),
