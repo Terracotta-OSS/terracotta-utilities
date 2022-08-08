@@ -154,6 +154,34 @@
     </plugins>
   </build>
 
+  <profiles>
+    <profile>
+      <!-- PlantUML diagram generation for javadoc requires Java 11+ -->
+      <id>plantuml-diagrams</id>
+      <activation>
+        <jdk>[11,)</jdk>
+        <property><name>!maven.javadoc.skip</name></property>
+      </activation>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>com.github.funthomas424242</groupId>
+            <artifactId>plantuml-maven-plugin</artifactId>
+            <executions>
+              <execution>
+                <id>plantuml</id>
+                <goals>
+                  <goal>generate</goal>
+                </goals>
+                <phase>generate-sources</phase>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
+
   <scm>
     <connection>scm:git:https://github.com/terracotta-oss/terracotta-utilities.git</connection>
     <developerConnection>scm:git:git@github.com:terracotta-oss/terracotta-utilities.git</developerConnection>

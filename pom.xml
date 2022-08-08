@@ -140,10 +140,13 @@
           <artifactId>maven-javadoc-plugin</artifactId>
           <version>3.2.0</version>
           <configuration>
+            <detectJavaApiLink>false</detectJavaApiLink>
+            <doclint>-accessibility</doclint><!-- Avoid complaints about table@summary -->
             <failOnError>false</failOnError>
             <failOnWarnings>false</failOnWarnings>
             <quiet>true</quiet>
             <author>false</author>
+            <javadocDirectory>${project.build.directory}/generated-sources/javadoc</javadocDirectory>
           </configuration>
         </plugin>
         <plugin>
@@ -335,6 +338,32 @@
         <groupId>org.sonatype.plugins</groupId>
         <artifactId>nexus-staging-maven-plugin</artifactId>
       </plugin>
+
+      <plugin>
+        <!-- com.github.funthomas424242:plantuml-maven-plugin requires Java 11+ -->
+        <groupId>com.github.funthomas424242</groupId>
+        <artifactId>plantuml-maven-plugin</artifactId>
+        <version>1.5.2</version>
+        <configuration>
+          <truncatePattern>src/main/*</truncatePattern>
+          <sourceFiles>
+            <directory>${basedir}</directory>
+            <includes>
+              <include>src/main/java/**/*.java</include>
+            </includes>
+          </sourceFiles>
+          <outputDirectory>${project.build.directory}/generated-sources/javadoc</outputDirectory>
+        </configuration>
+        <dependencies>
+          <dependency>
+            <groupId>net.sourceforge.plantuml</groupId>
+            <artifactId>plantuml</artifactId>
+            <version>1.2022.6</version>
+            <scope>runtime</scope>
+          </dependency>
+        </dependencies>
+      </plugin>
+
     </plugins>
   </build>
 

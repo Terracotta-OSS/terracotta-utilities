@@ -563,6 +563,7 @@ public class PortManager {
         disableCheck = true;
       } else {
         List<NetStat.BusyPort> collisions = portInfo.stream()
+            .filter(p -> p.state() != NetStat.BusyPort.TcpState.TIME_WAIT)    // Exclude TIME_WAIT
             .filter(p -> p.localEndpoint().getPort() == port)
             .collect(toList());
         if (!collisions.isEmpty()) {
