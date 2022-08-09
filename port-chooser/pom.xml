@@ -160,7 +160,10 @@
       <id>plantuml-diagrams</id>
       <activation>
         <jdk>[11,)</jdk>
-        <property><name>!maven.javadoc.skip</name></property>
+        <property>
+          <name>maven.javadoc.skip</name>
+          <value>!true</value>
+        </property>
       </activation>
       <build>
         <plugins>
