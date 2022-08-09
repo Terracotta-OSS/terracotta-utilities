@@ -15,10 +15,8 @@ jobs:
     # uncomment to disable this job
     #if: ${{ false }}
     name: Build Javadoc
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
-      - name: Install fontconfig
-        run: sudo apt-get install -y fontconfig
       - name: Checkout
         uses: actions/checkout@v2
       - name: Install Java
@@ -27,4 +25,4 @@ jobs:
           java-version: 11
           distribution: zulu
       - name: Build Javadoc with Maven
-        run: ./mvnw install javadoc:javadoc -V -B -DskipToolchain -DskipTests -Djava.version=11
+        run: ./mvnw package -V -B -DskipToolchain -DskipTests "-Djava.version=11"
