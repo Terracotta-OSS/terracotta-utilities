@@ -1232,7 +1232,7 @@ public class NetStat {
      * The following diagram shows the usual TCP state transitions.  For a discussion of this diagram,
      * see <i>RFC-793 Transmission Control Protocol</i> and
      * <i>TCP/IP Illustrated, Volume 1, 1ed: The Protocols</i> by W. Richard Stevens.
-     * <table summary="TCP State Diagram &amp; Legend">
+     * <table>
      *   <tbody>
      *     <tr>
      *       <td><img src="doc-files/tcp_state_diagram.png" alt="TCP State Diagram"></td>

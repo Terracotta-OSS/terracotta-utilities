@@ -672,7 +672,7 @@ public final class Files {
    * interference from system tasks.
    * <p>
    * The following options are supported:
-   * <table border=1 cellpadding=5 summary="">
+   * <table border=1>
    * <tr> <th>Option</th> <th>Description</th> </tr>
    * <tr>
    *   <td>{@link StandardCopyOption#REPLACE_EXISTING REPLACE_EXISTING}</td>
