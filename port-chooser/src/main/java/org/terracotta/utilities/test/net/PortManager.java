@@ -207,6 +207,13 @@ public class PortManager {
     EphemeralPorts.Range range = EphemeralPorts.getRange();
     portMap.set(range.getLower(), range.getUpper() + 1);
 
+    /*
+     * Prevent assignment of any reserved ports on the platform.
+     */
+    for (EphemeralPorts.Range reservedRange : ReservedPorts.getRange()) {
+      portMap.set(reservedRange.getLower(), reservedRange.getUpper() + 1);
+    }
+
     restrictedPorts.or(portMap);
 
     assignablePortCount = MAXIMUM_PORT_NUMBER + 1 - portMap.cardinality();
