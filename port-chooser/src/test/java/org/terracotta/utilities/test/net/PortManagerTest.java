@@ -315,8 +315,8 @@ public class PortManagerTest {
   @SuppressWarnings("try")
   @Test
   public void testReleaseCheckEnabled() throws IOException {
-    // This test requires a properly functioning 'sudo --non-interactive -- lsof ...' on Linux
-    assumeTrue("'sudo --non-interactive -- lsof -iTCP not available", TestSupport.sudoLsofWorks());
+    // This test requires a properly functioning 'lsof ...' on Linux
+    assumeTrue("'lsof -iTCP not available", TestSupport.lsofWorks());
 
     // This test MUST be run when PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE is false or not specified
     assertFalse(PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE + " environment variable must be false or not specified",

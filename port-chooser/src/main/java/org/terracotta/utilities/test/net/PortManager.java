@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Terracotta, Inc., a Software AG company.
+ * Copyright 2020-2022 Terracotta, Inc., a Software AG company.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -563,11 +563,10 @@ public class PortManager {
 
     boolean disableCheck = false;
     try {
-      List<NetStat.BusyPort> portInfo = NetStat.info();
+      List<NetStat.BusyPort> portInfo = NetStat.info(port);
       if (portInfo.isEmpty()) {
-        // An empty list is unusual and not likely to become non-empty on subsequent calls
-        LOGGER.warn("No busy port information obtained to verify release of port {}", port);
-        disableCheck = true;
+        // An empty list for a single port is normal -- the port is no longer in use
+        LOGGER.trace("No busy port information obtained to verify release of port {}", port);
       } else {
         List<NetStat.BusyPort> collisions = portInfo.stream()
             .filter(p -> p.state() != NetStat.BusyPort.TcpState.TIME_WAIT)    // Exclude TIME_WAIT

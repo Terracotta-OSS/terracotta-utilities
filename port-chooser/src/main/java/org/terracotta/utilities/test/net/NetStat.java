@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Terracotta, Inc., a Software AG company.
+ * Copyright 2020-2022 Terracotta, Inc., a Software AG company.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -98,12 +98,48 @@ public class NetStat {
   }
 
   /**
+   * Gets the list of busy ports associated with a single local port.
+   * <p>
+   * Note that individual ports may appear more than once in the returned list.
+   * Depending on the source, a port may be listed for both IPv4 and IPv6 uses;
+   * for some applications (e.g. {@code sshd}), a port may be shared among multiple
+   * processes.
+   * @param port the target port
+   * @return the list of {@link BusyPort} instances representing the busy TCP ports
+   * @throws IllegalArgumentException if {@code port} is not a valid port number
+   * @throws RuntimeException if the busy port information cannot be obtained
+   */
+  public static List<BusyPort> info(int port) {
+    if (port <= 0 || port > 65535) {
+      throw new IllegalArgumentException(port + " is not a valid port number");
+    }
+    try {
+      return Platform.getPlatform().netstat(port);
+    } catch (Exception e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  /**
    * Writes the list returned by {@link #info()} to {@code System.out}.
-   * @param args none used
+   * @param args zero or more port numbers to check
    */
   public static void main(String[] args) {
-    for (BusyPort port : info()) {
-      System.out.println(port.toString("\t"));
+    if (args.length == 0) {
+      for (BusyPort port : info()) {
+        System.out.println(port.toString("\t"));
+      }
+    } else {
+      for (String arg : args) {
+        try {
+          int port = Integer.parseInt(arg);
+          for (BusyPort busyPort : info(port)) {
+            System.out.println(busyPort.toString("\t"));
+          }
+        } catch (IllegalArgumentException e) {
+          System.out.format("'%s' is not a valid port number: %s", arg, e);
+        }
+      }
     }
   }
 
@@ -130,7 +166,24 @@ public class NetStat {
       public List<BusyPort> netstat() throws HostExecutionException {
         Function<Stream<String>, List<BusyPort>> conversion =
             stream -> stream.skip(1).map(NetStat::parseWindowsCsv).collect(toList());
-        return runCommand(POWERSHELL_NETSTAT_COMMAND, conversion);
+        return runCommand(prepareCommand(POWERSHELL_NETSTAT_COMMAND, ""), conversion);
+      }
+
+      /**
+       * {@inheritDoc}
+       * <p>
+       * This method returns the TCP connections as obtained from the PowerShell {@code Get-NetTCPConnection}
+       * cmdlet.
+       * @return {@inheritDoc}
+       * @throws HostExecutionException {@inheritDoc}
+       * @see <a href="https://docs.microsoft.com/en-us/powershell/module/nettcpip/get-nettcpconnection?view=win10-ps">
+       *     Get-NetTCPConnection</a>
+       */
+      @Override
+      public List<BusyPort> netstat(int port) throws HostExecutionException {
+        Function<Stream<String>, List<BusyPort>> conversion =
+            stream -> stream.skip(1).map(NetStat::parseWindowsCsv).collect(toList());
+        return runCommand(prepareCommand(POWERSHELL_NETSTAT_COMMAND, String.format("-LocalPort %d", port)), conversion);
       }
     },
 
@@ -144,6 +197,23 @@ public class NetStat {
       @Override
       public List<BusyPort> netstat() throws HostExecutionException {
         List<BusyPort> busyPorts = runCommand(NETTOP_COMMAND, NetStat::parseNetTop);
+
+        /*
+         * Since the 'nettop' command doesn't provide a useful command string, 'ps' is used to
+         * augment what was returned by 'nettop'.
+         */
+        return mergeCommands(busyPorts);
+      }
+
+      @Override
+      public List<BusyPort> netstat(int port) throws HostExecutionException {
+        /*
+         * nettop has no option to return results for a single port so the results are filtered
+         */
+        List<BusyPort> busyPorts =
+            runCommand(NETTOP_COMMAND, NetStat::parseNetTop).stream()
+                .filter(busyPort -> busyPort.localEndpoint.getPort() == port)
+                .collect(toList());
 
         /*
          * Since the 'nettop' command doesn't provide a useful command string, 'ps' is used to
@@ -166,8 +236,17 @@ public class NetStat {
     LINUX("linux") {
       @Override
       public List<BusyPort> netstat() throws HostExecutionException {
-        String[] sudoLsof = Arrays.copyOf(SUDO_PREFIX, SUDO_PREFIX.length + LSOF_COMMAND.length);
-        System.arraycopy(LSOF_COMMAND, 0, sudoLsof, SUDO_PREFIX.length, LSOF_COMMAND.length);
+        return busyPorts(prepareCommand(LSOF_COMMAND, "TCP"), true);
+      }
+
+      @Override
+      public List<BusyPort> netstat(int port) throws HostExecutionException {
+        return busyPorts(prepareCommand(LSOF_COMMAND, String.format(":%d", port)), false);
+      }
+
+      private List<BusyPort> busyPorts(String[] lsofCommand, boolean allPorts) throws HostExecutionException {
+        String[] sudoLsof = Arrays.copyOf(SUDO_PREFIX, SUDO_PREFIX.length + lsofCommand.length);
+        System.arraycopy(lsofCommand, 0, sudoLsof, SUDO_PREFIX.length, lsofCommand.length);
         List<BusyPort> busyPorts;
         try {
           busyPorts = runCommand(sudoLsof, NetStat::parseLsof);
@@ -180,7 +259,9 @@ public class NetStat {
            */
           if (e.exitCode() == 1 && e.output().isEmpty()) {
             // No detected ports
-            LOGGER.warn("'lsof' returned no active TCP ports; cannot determine in-use TCP ports: {}", e.getMessage());
+            if (allPorts) {
+              LOGGER.warn("'lsof' returned no active TCP ports; cannot determine in-use TCP ports: {}", e.getMessage());
+            }
             return Collections.emptyList();
           } else {
             /*
@@ -212,14 +293,16 @@ public class NetStat {
             /*
              * Attempt 'lsof' command without 'sudo'.
              */
-            LOGGER.warn("Attempting {} without 'sudo' elevation; ports owned by other users may be omitted", Arrays.toString(LSOF_COMMAND));
+            LOGGER.warn("Attempting {} without 'sudo' elevation; ports owned by other users may be omitted", Arrays.toString(lsofCommand));
             try {
-              busyPorts = runCommand(LSOF_COMMAND, NetStat::parseLsof);
+              busyPorts = runCommand(lsofCommand, NetStat::parseLsof);
             } catch (Exception ex) {
               if ((ex instanceof HostExecutionException)) {
                 HostExecutionException hex = (HostExecutionException)ex;
                 if (hex.exitCode() == 1 && hex.output().isEmpty()) {
-                  LOGGER.warn("'lsof' returned no active TCP ports; cannot determine in-use TCP ports: {}", hex.getMessage());
+                  if (allPorts) {
+                    LOGGER.warn("'lsof' returned no active TCP ports; cannot determine in-use TCP ports: {}", hex.getMessage());
+                  }
                   return Collections.emptyList();
                 }
               }
@@ -256,6 +339,16 @@ public class NetStat {
      * @throws HostExecutionException if there was a failure in obtaining the TCP connections or host processes lists
      */
     public abstract List<BusyPort> netstat() throws HostExecutionException;
+
+    /**
+     * Gets the list of TCP connections for a single local port joined with information about the process
+     * that owns each connection. Administrator privileges may be required for complete output.
+     * @param port the target port
+     * @return a list of {@code BusyPort} instances describing the active connections for {@code port}; this
+     *        list may include both IPv4 and IPv6 connections
+     * @throws HostExecutionException if there was a failure in obtaining the TCP connections or host processes lists
+     */
+    public abstract List<BusyPort> netstat(int port) throws HostExecutionException;
 
     /**
      * Gets the {@code Platform} constant for the current operating system.
@@ -321,6 +414,25 @@ public class NetStat {
       } else {
         throw new HostExecutionException(Arrays.toString(command), result);
       }
+    }
+
+    /**
+     * Prepares a command array using {@code String.format} to substitute arguments.  If the
+     * argument list contains more than one argument, {@code commandTemplate} should use format
+     * specifiers using the argument index form.
+     * @param commandTemplate the array composing the command to prepare
+     * @param args the arguments to substitute into the command array strings
+     * @return the prepared command array
+     */
+    private static String[] prepareCommand(String[] commandTemplate, Object... args) {
+      String[] command = Arrays.copyOf(commandTemplate, commandTemplate.length);
+      for (int i = 0; i < command.length; i++) {
+        String segment = command[i];
+        if (segment.indexOf('%') != 0) {
+          command[i] = String.format(segment, args);
+        }
+      }
+      return command;
     }
   }
 
@@ -404,7 +516,7 @@ public class NetStat {
       "&{$ErrorActionPreference = 'Stop'; " +
           " $processes = Get-WmiObject -Class \"Win32_Process\" -Namespace \"ROOT\\CIMV2\" " +
           "| Select-Object -Property ProcessId, Caption, CommandLine; " +
-          " Get-NetTCPConnection " +
+          " Get-NetTCPConnection %1$s -ErrorAction SilentlyContinue " +
           "| Select-Object -Property OwningProcess, LocalAddress, LocalPort, RemoteAddress, RemotePort, State " +
           "| Foreach-Object {" +
           "  $connection = $_;" +
@@ -572,7 +684,7 @@ public class NetStat {
   private static final String[] LSOF_COMMAND = new String[] {
       "lsof",
       "-nP",          // Use numeric IP addresses; use numeric ports
-      "-iTCP",        // Match only TCP connections
+      "-i%1$s",       // Match only TCP connections ('TCP') or a single port (':<port>')
       "-F",           // Field list ...
       "0pPRgLnTftc",  // ... see 'parseLsof' for description
       "+c0",          // Use expanded COMMAND value
