@@ -130,7 +130,7 @@ public final class TestSupport {
       Shell.Result result = Shell.execute(Shell.Encoding.CHARSET, lsofCommand);
       if (result.exitCode() == 0) {
         /*
-         * '-F n' causes the output to be "parsable" and include only groups od process IDs and network numbers.
+         * '-F n' causes the output to be "parsable" and include only groups of process IDs, FDs, and network numbers.
          * Ensure we actually got process groups with network numbers.
          */
         Map<String, List<String>> portsPerProcess = new LinkedHashMap<>();
@@ -147,12 +147,20 @@ public final class TestSupport {
               currentProcess = new ArrayList<>();
               portsPerProcess.put(line, currentProcess);
               break;
+            case 'f':
+              if (currentProcess == null) {
+                LOGGER.warn("Unexpected output from {}; missing process '{}'{}",
+                    Arrays.toString(lsofCommand), escape(line), collectEscapedLines(result));
+                return false;
+              }
+              break;
             case 'n':
               if (currentProcess == null) {
                 LOGGER.warn("Unexpected output from {}; missing process '{}'{}",
                     Arrays.toString(lsofCommand), escape(line), collectEscapedLines(result));
                 return false;
               }
+              currentProcess.add(line);
               break;
             default:
               LOGGER.warn("Unexpected output from {}: '{}'{}",
