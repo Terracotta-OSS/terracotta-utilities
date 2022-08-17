@@ -157,7 +157,7 @@ public class FilesRelocateTest extends FilesRelocateTestBase {
       assertTrue("actualTree is smaller than expectedTree:\n    actual=" + actualDetails + "\n    expected=" + expectedDetails, actualIterator.hasNext());
       PathDetails expectedDetail = expectedIterator.next();
       PathDetails actualDetail = actualIterator.next();
-      assertTrue("Target " + actualDetails + " does not mirror\n    source " + expectedDetail, actualDetail.mirrors(expectedDetail, true));
+      assertTrue("Target " + actualDetail + " does not mirror\n    source " + expectedDetail, actualDetail.mirrors(expectedDetail, true));
     }
     assertFalse("actualTree is larger than expectedTree:\n    actual=" + actualDetails + "\n    expected=" + expectedDetails, actualIterator.hasNext());
   }

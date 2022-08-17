@@ -1,0 +1,28 @@
+name: CI - Javadoc
+on:
+  # allow to manually trigger a build through the Actions tab
+  workflow_dispatch:
+  # trigger build on PR
+  pull_request:
+  # trigger build when a branch is pushed
+  push:
+    # put here a list of branches like master, release/x.y, or any branch name activated for building. This also applies to forks.
+    branches:
+      - master
+      - ga # required at the moment until this PR is merged, to verify it works in my fork. Can be removed after once GA build integration is finished.
+jobs:
+  javadoc:
+    # uncomment to disable this job
+    #if: ${{ false }}
+    name: Build Javadoc
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Install Java
+        uses: actions/setup-java@v2
+        with:
+          java-version: 11
+          distribution: zulu
+      - name: Build Javadoc with Maven
+        run: ./mvnw package -V -B -DskipToolchain -DskipTests "-Djava.version=11"

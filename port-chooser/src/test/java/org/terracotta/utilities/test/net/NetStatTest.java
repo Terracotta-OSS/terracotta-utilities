@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Terracotta, Inc., a Software AG company.
+ * Copyright 2020-2022 Terracotta, Inc., a Software AG company.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,12 +29,25 @@ public class NetStatTest {
 
   @Test
   public void testInfo() throws IOException {
-    // This test requires a properly functioning 'sudo --non-interactive -- lsof ...' on Linux
-    assumeTrue("'sudo --non-interactive -- lsof -iTCP not available", TestSupport.sudoLsofWorks());
+    // This test requires a properly functioning 'lsof ...' on Linux
+    assumeTrue("'lsof -iTCP not available", TestSupport.lsofWorks());
 
     try (PortManager.PortRef portRef = PortManager.getInstance().reservePort()) {
       try (ServerSocket openSocket = new ServerSocket(portRef.port())) {
         List<NetStat.BusyPort> busyPorts = NetStat.info();
+        assertTrue(busyPorts.stream().mapToInt(p -> p.localEndpoint().getPort()).anyMatch(p -> p == openSocket.getLocalPort()));
+      }
+    }
+  }
+
+  @Test
+  public void testInfoPort() throws IOException {
+    // This test requires a properly functioning 'lsof ...' on Linux
+    assumeTrue("'lsof -iTCP not available", TestSupport.lsofWorks());
+
+    try (PortManager.PortRef portRef = PortManager.getInstance().reservePort()) {
+      try (ServerSocket openSocket = new ServerSocket(portRef.port())) {
+        List<NetStat.BusyPort> busyPorts = NetStat.info(openSocket.getLocalPort());
         assertTrue(busyPorts.stream().mapToInt(p -> p.localEndpoint().getPort()).anyMatch(p -> p == openSocket.getLocalPort()));
       }
     }

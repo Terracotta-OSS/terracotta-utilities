@@ -124,7 +124,7 @@ public class EphemeralPorts {
     private final int upper;
     private final int lower;
 
-    private Range(int lower, int upper) {
+    Range(int lower, int upper) {
       this.lower = lower;
       this.upper = upper;
     }

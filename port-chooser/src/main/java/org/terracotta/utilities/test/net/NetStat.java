@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Terracotta, Inc., a Software AG company.
+ * Copyright 2020-2022 Terracotta, Inc., a Software AG company.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -98,12 +98,48 @@ public class NetStat {
   }
 
   /**
+   * Gets the list of busy ports associated with a single local port.
+   * <p>
+   * Note that individual ports may appear more than once in the returned list.
+   * Depending on the source, a port may be listed for both IPv4 and IPv6 uses;
+   * for some applications (e.g. {@code sshd}), a port may be shared among multiple
+   * processes.
+   * @param port the target port
+   * @return the list of {@link BusyPort} instances representing the busy TCP ports
+   * @throws IllegalArgumentException if {@code port} is not a valid port number
+   * @throws RuntimeException if the busy port information cannot be obtained
+   */
+  public static List<BusyPort> info(int port) {
+    if (port <= 0 || port > 65535) {
+      throw new IllegalArgumentException(port + " is not a valid port number");
+    }
+    try {
+      return Platform.getPlatform().netstat(port);
+    } catch (Exception e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  /**
    * Writes the list returned by {@link #info()} to {@code System.out}.
-   * @param args none used
+   * @param args zero or more port numbers to check
    */
   public static void main(String[] args) {
-    for (BusyPort port : info()) {
-      System.out.println(port.toString("\t"));
+    if (args.length == 0) {
+      for (BusyPort port : info()) {
+        System.out.println(port.toString("\t"));
+      }
+    } else {
+      for (String arg : args) {
+        try {
+          int port = Integer.parseInt(arg);
+          for (BusyPort busyPort : info(port)) {
+            System.out.println(busyPort.toString("\t"));
+          }
+        } catch (IllegalArgumentException e) {
+          System.out.format("'%s' is not a valid port number: %s", arg, e);
+        }
+      }
     }
   }
 
@@ -130,7 +166,24 @@ public class NetStat {
       public List<BusyPort> netstat() throws HostExecutionException {
         Function<Stream<String>, List<BusyPort>> conversion =
             stream -> stream.skip(1).map(NetStat::parseWindowsCsv).collect(toList());
-        return runCommand(POWERSHELL_NETSTAT_COMMAND, conversion);
+        return runCommand(prepareCommand(POWERSHELL_NETSTAT_COMMAND, ""), conversion);
+      }
+
+      /**
+       * {@inheritDoc}
+       * <p>
+       * This method returns the TCP connections as obtained from the PowerShell {@code Get-NetTCPConnection}
+       * cmdlet.
+       * @return {@inheritDoc}
+       * @throws HostExecutionException {@inheritDoc}
+       * @see <a href="https://docs.microsoft.com/en-us/powershell/module/nettcpip/get-nettcpconnection?view=win10-ps">
+       *     Get-NetTCPConnection</a>
+       */
+      @Override
+      public List<BusyPort> netstat(int port) throws HostExecutionException {
+        Function<Stream<String>, List<BusyPort>> conversion =
+            stream -> stream.skip(1).map(NetStat::parseWindowsCsv).collect(toList());
+        return runCommand(prepareCommand(POWERSHELL_NETSTAT_COMMAND, String.format("-LocalPort %d", port)), conversion);
       }
     },
 
@@ -144,6 +197,23 @@ public class NetStat {
       @Override
       public List<BusyPort> netstat() throws HostExecutionException {
         List<BusyPort> busyPorts = runCommand(NETTOP_COMMAND, NetStat::parseNetTop);
+
+        /*
+         * Since the 'nettop' command doesn't provide a useful command string, 'ps' is used to
+         * augment what was returned by 'nettop'.
+         */
+        return mergeCommands(busyPorts);
+      }
+
+      @Override
+      public List<BusyPort> netstat(int port) throws HostExecutionException {
+        /*
+         * nettop has no option to return results for a single port so the results are filtered
+         */
+        List<BusyPort> busyPorts =
+            runCommand(NETTOP_COMMAND, NetStat::parseNetTop).stream()
+                .filter(busyPort -> busyPort.localEndpoint.getPort() == port)
+                .collect(toList());
 
         /*
          * Since the 'nettop' command doesn't provide a useful command string, 'ps' is used to
@@ -166,8 +236,17 @@ public class NetStat {
     LINUX("linux") {
       @Override
       public List<BusyPort> netstat() throws HostExecutionException {
-        String[] sudoLsof = Arrays.copyOf(SUDO_PREFIX, SUDO_PREFIX.length + LSOF_COMMAND.length);
-        System.arraycopy(LSOF_COMMAND, 0, sudoLsof, SUDO_PREFIX.length, LSOF_COMMAND.length);
+        return busyPorts(prepareCommand(LSOF_COMMAND, "TCP"), true);
+      }
+
+      @Override
+      public List<BusyPort> netstat(int port) throws HostExecutionException {
+        return busyPorts(prepareCommand(LSOF_COMMAND, String.format(":%d", port)), false);
+      }
+
+      private List<BusyPort> busyPorts(String[] lsofCommand, boolean allPorts) throws HostExecutionException {
+        String[] sudoLsof = Arrays.copyOf(SUDO_PREFIX, SUDO_PREFIX.length + lsofCommand.length);
+        System.arraycopy(lsofCommand, 0, sudoLsof, SUDO_PREFIX.length, lsofCommand.length);
         List<BusyPort> busyPorts;
         try {
           busyPorts = runCommand(sudoLsof, NetStat::parseLsof);
@@ -180,7 +259,9 @@ public class NetStat {
            */
           if (e.exitCode() == 1 && e.output().isEmpty()) {
             // No detected ports
-            LOGGER.warn("'lsof' returned no active TCP ports; cannot determine in-use TCP ports: {}", e.getMessage());
+            if (allPorts) {
+              LOGGER.warn("'lsof' returned no active TCP ports; cannot determine in-use TCP ports: {}", e.getMessage());
+            }
             return Collections.emptyList();
           } else {
             /*
@@ -212,14 +293,16 @@ public class NetStat {
             /*
              * Attempt 'lsof' command without 'sudo'.
              */
-            LOGGER.warn("Attempting {} without 'sudo' elevation; ports owned by other users may be omitted", Arrays.toString(LSOF_COMMAND));
+            LOGGER.warn("Attempting {} without 'sudo' elevation; ports owned by other users may be omitted", Arrays.toString(lsofCommand));
             try {
-              busyPorts = runCommand(LSOF_COMMAND, NetStat::parseLsof);
+              busyPorts = runCommand(lsofCommand, NetStat::parseLsof);
             } catch (Exception ex) {
               if ((ex instanceof HostExecutionException)) {
                 HostExecutionException hex = (HostExecutionException)ex;
                 if (hex.exitCode() == 1 && hex.output().isEmpty()) {
-                  LOGGER.warn("'lsof' returned no active TCP ports; cannot determine in-use TCP ports: {}", hex.getMessage());
+                  if (allPorts) {
+                    LOGGER.warn("'lsof' returned no active TCP ports; cannot determine in-use TCP ports: {}", hex.getMessage());
+                  }
                   return Collections.emptyList();
                 }
               }
@@ -256,6 +339,16 @@ public class NetStat {
      * @throws HostExecutionException if there was a failure in obtaining the TCP connections or host processes lists
      */
     public abstract List<BusyPort> netstat() throws HostExecutionException;
+
+    /**
+     * Gets the list of TCP connections for a single local port joined with information about the process
+     * that owns each connection. Administrator privileges may be required for complete output.
+     * @param port the target port
+     * @return a list of {@code BusyPort} instances describing the active connections for {@code port}; this
+     *        list may include both IPv4 and IPv6 connections
+     * @throws HostExecutionException if there was a failure in obtaining the TCP connections or host processes lists
+     */
+    public abstract List<BusyPort> netstat(int port) throws HostExecutionException;
 
     /**
      * Gets the {@code Platform} constant for the current operating system.
@@ -321,6 +414,25 @@ public class NetStat {
       } else {
         throw new HostExecutionException(Arrays.toString(command), result);
       }
+    }
+
+    /**
+     * Prepares a command array using {@code String.format} to substitute arguments.  If the
+     * argument list contains more than one argument, {@code commandTemplate} should use format
+     * specifiers using the argument index form.
+     * @param commandTemplate the array composing the command to prepare
+     * @param args the arguments to substitute into the command array strings
+     * @return the prepared command array
+     */
+    private static String[] prepareCommand(String[] commandTemplate, Object... args) {
+      String[] command = Arrays.copyOf(commandTemplate, commandTemplate.length);
+      for (int i = 0; i < command.length; i++) {
+        String segment = command[i];
+        if (segment.indexOf('%') != 0) {
+          command[i] = String.format(segment, args);
+        }
+      }
+      return command;
     }
   }
 
@@ -404,7 +516,7 @@ public class NetStat {
       "&{$ErrorActionPreference = 'Stop'; " +
           " $processes = Get-WmiObject -Class \"Win32_Process\" -Namespace \"ROOT\\CIMV2\" " +
           "| Select-Object -Property ProcessId, Caption, CommandLine; " +
-          " Get-NetTCPConnection " +
+          " Get-NetTCPConnection %1$s -ErrorAction SilentlyContinue " +
           "| Select-Object -Property OwningProcess, LocalAddress, LocalPort, RemoteAddress, RemotePort, State " +
           "| Foreach-Object {" +
           "  $connection = $_;" +
@@ -572,7 +684,7 @@ public class NetStat {
   private static final String[] LSOF_COMMAND = new String[] {
       "lsof",
       "-nP",          // Use numeric IP addresses; use numeric ports
-      "-iTCP",        // Match only TCP connections
+      "-i%1$s",       // Match only TCP connections ('TCP') or a single port (':<port>')
       "-F",           // Field list ...
       "0pPRgLnTftc",  // ... see 'parseLsof' for description
       "+c0",          // Use expanded COMMAND value
@@ -1223,6 +1335,37 @@ public class NetStat {
 
     /**
      * TCP Connection states.
+     * <p>
+     * This class maps the states observed by the utilities used to examine the TCP connections on the
+     * platform to a common form.  Where the state maps to a state described in
+     * <a href="https://datatracker.ietf.org/doc/html/rfc793">RFC-793 Transmission Control Protocol</a>,
+     * that state name is used for the enumeration constant.
+     * <p>
+     * The following diagram shows the usual TCP state transitions.  For a discussion of this diagram,
+     * see <i>RFC-793 Transmission Control Protocol</i> and
+     * <i>TCP/IP Illustrated, Volume 1, 1ed: The Protocols</i> by W. Richard Stevens.
+     * <table>
+     *   <tbody>
+     *     <tr>
+     *       <td><img src="doc-files/tcp_state_diagram.png" alt="TCP State Diagram"></td>
+     *       <td><img src="doc-files/tcp_state_diagram_legend.png" alt="Legend for TCP State Diagram"></td>
+     *     </tr>
+     *   </tbody>
+     * </table>
+     * <ul>
+     *   <li>
+     *     The CLOSE_WAIT and FIN_WAIT_2 states are paired -- one side of the connection will be in CLOSE_WAIT and
+     *     the other in FIN_WAIT_2.  Until the application in CLOSE_WAIT actually <i>closes</i> the connection, the
+     *     connection remains with neither socket endpoint being available for re-use.  (According to (Stevens 1994),
+     *     some TCP implementations will move a socket in FIN_WAIT_2 to CLOSED after 10+ minutes of idle time.)
+     *   </li>
+     *   <li>
+     *     The TIME_WAIT state is applied to a newly closed connection and is used to prevent immediate re-use of
+     *     the socket to allow delivery of potentially delayed packets.  The amount of time the socket remains in
+     *     TIME_WAIT varies by implementation (and potentially configuration) but is commonly 2 minutes.
+     *   </li>
+     * </ul>
+     *
      *
      * <h3>Implementation Notes</h3>
      * <h4>Mac OS X</h4>
@@ -1241,23 +1384,111 @@ public class NetStat {
      * @see <a href="https://raw.githubusercontent.com/apple/darwin-xnu/0a798f6738bc1db01281fc08ae024145e84df927/bsd/netinet/tcp_fsm.h">
      *   apple/darwin-xnu/bsd/netinet/tcp_fsm.h</a>
      * @see <a href="http://newosxbook.com/src.jl?tree=listings&file=netbottom.c"><code>netbottom.c</code> Sources</a>
+     * @see "Stevens, W. Richard (1994) <i>TCP/IP Illustrated, Volume 1, 1ed: The Protocols</i>, Addison-Wesley"
+     * @see <a href="https://datatracker.ietf.org/doc/html/rfc793">RFC-793 Transmission Control Protocol</a>
+     */
+    /*
+     * The following PlantUML diagrams are processed using the com.github.funthomas424242:plantuml-maven-plugin plugin.
+     *
+     * @startuml doc-files/tcp_state_diagram.png
+     * title TCP State Transition Diagram\nAdapted from Stevens, W. Richard (1994) //TCP/IP Illustrated, Volume 1, 1ed: The Protocols//, Addison-Wesley, Figure 18.12, p. 241
+     * hide empty description
+     *
+     * [*] --> CLOSED
+     * LISTEN : //passive open//
+     * SYN_SENT : //active open//
+     * ESTABLISHED : //data transfer state//
+     *
+     * CLOSED -down[#blue,dashed]-> LISTEN : appl: **passive open**\nsend: <nothing>
+     * LISTEN -down[#blue,dashed]-> SYN_RCVD : recv: SYN\nsend: SYN, ACK
+     * LISTEN -down-> SYN_SENT : appl: **send data**\nsend: SYN
+     * CLOSED -down[#blue]-> SYN_SENT : appl: **active open**\nsend: SYN
+     * SYN_RCVD --> LISTEN : recv: RST
+     * SYN_RCVD -down[#blue,dashed]-> ESTABLISHED : recv: ACK\nsend: <nothing>
+     * SYN_SENT -down[#blue]-> ESTABLISHED : recv: SYN, ACK\nsend: ACK
+     * SYN_SENT --> CLOSED : appl: **close**\nor timeout
+     * SYN_SENT -left-> SYN_RCVD : recv: SYN\nsend: SYN, ACK\n//simultaneous open//
+     *
+     * state "//passive close//" as passiveClose {
+     *   ESTABLISHED -right[#blue,dashed]-> CLOSE_WAIT : revc: FIN\nsend: ACK
+     *   CLOSE_WAIT -down[#blue,dashed]-> LAST_ACK : appl: **close**\nsend: FIN
+     *   LAST_ACK -up[#blue]-> CLOSED : recv: ACK\nsend: <nothing>
+     * }
+     *
+     * state "//active close//" as activeClose {
+     *   FIN_WAIT_1 <-down- SYN_RCVD : appl: **close**\nsend: FIN
+     *   FIN_WAIT_1 <-down[#blue]- ESTABLISHED : appl: **close**\nsend: FIN
+     *   FIN_WAIT_1 -down[#blue]-> FIN_WAIT_2 : recv: ACK\nsend: <nothing>
+     *   FIN_WAIT_1 -> CLOSING : recv: FIN\nsend: ACK
+     *   FIN_WAIT_1 -> TIME_WAIT : recv: FIN, ACK\nsend: ACK
+     *   FIN_WAIT_2 -right[#blue]-> TIME_WAIT : recv: FIN\nsend: ACK
+     *   CLOSING -down-> TIME_WAIT : recv: ACK\nsend: <nothing>
+     *   CLOSING : //simultaneous close//
+     *   TIME_WAIT -up[#blue]-> CLOSED
+     *   TIME_WAIT : //2MSL timeout//
+     * }
+     * @enduml
+     *
+     * @startuml doc-files/tcp_state_diagram_legend.png
+     * scale 0.75
+     * state Legend #lightblue {
+     *      !$arrow_length = %string("." + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160) + %chr(160))
+     *
+     *     state "normal transition for client" as client {
+     *      [*] -right[#blue]-> [*] : $arrow_length
+     *     }
+     *     --
+     *     state "normal transition for server" as server {
+     *      [*] -right[dashed]-> [*] : $arrow_length
+     *     }
+     *     --
+     *     state "application-initiated state transitions" as appl {
+     *       [*] -right-> [*] : appl: **<operation>**
+     *     }
+     *     --
+     *     state "segment receipt-initiated state transitions" as recv {
+     *       [*] -right-> [*] : recv: <message>
+     *     }
+     *     --
+     *     state "segment sent as a result of state transition" as send {
+     *       [*] -right-> [*] : send: <message>
+     *     }
+     * }
+     * @enduml
+     *
      */
     public enum TcpState {
+      /** Connection state is unknown (MSFT_NetTCPConnection). **/
       UNKNOWN("", 0, "", ""),
+      /** Not connected (RFC-793). **/
       CLOSED("Closed", 1, "Closed", "CLOSED"),
+      /** Awaiting a connection request (RFC-793). **/
       LISTEN("Listen", 2, "Listen", "LISTEN"),
+      /** Awaiting a matching connection request after having sent a connection request (RFC-793). **/
       SYN_SENT("SynSent", 3, "SynSent", "SYN_SENT"),
+      /** Awaiting connection request acknowledgement after having sent and received a connection request (RFC-793). **/
       SYN_RECEIVED("SynReceived", 4, "SynReceived", "SYN_RECV", "SYN_RCVD"),
+      /** An "open" TCP connection over which data may be transferred (RFC-793). **/
       ESTABLISHED("Established", 5, "Established", "ESTABLISHED"),
+      /** Awaiting connection termination request or acknowledgement of sent connection termination request from remote (RFC-793). **/
       FIN_WAIT_1("FinWait1", 6, "FinWait1", "FIN_WAIT_1"),
+      /** Awaiting connection termination request from remote (RFC-793). **/
       FIN_WAIT_2("FinWait2", 7, "FinWait2", "FIN_WAIT_2"),
+      /** Awaiting application-level connection termination (socket close) (RFC-793). **/
       CLOSE_WAIT("CloseWait", 8, "CloseWait", "CLOSE_WAIT"),
+      /** Awaiting connection termination request acknowledgement from remote (RFC-793). **/
       CLOSING("Closing", 9, "Closing", "CLOSING"),
+      /** Awaiting acknowledgement of connection termination request sent to remote (RFC-793). **/
       LAST_ACK("LastAck", 10, "LastAck", "LAST_ACK"),
+      /** Awaiting expiration of TCP implementation-defined timeout before socket of closed connection can be re-used (RFC-793). **/
       TIME_WAIT("TimeWait", 11, "TimeWait", "TIME_WAIT"),
+      /** Indicates the control block representing the TCP connection is being deleted (MSFT_NetTCPConnection). **/
       DELETE_TCB("DeleteTCB",  12, "", ""),
+      /** Awaiting application {@code listen}, {@code connect}, {@code accept}, or {@code close} call following {@code bind} (lsof). **/
       BOUND("Bound", -1, "", "BOUND"),
+      /** Awaiting application {@code close} following a socket/connection error (lsof/Linux). **/
       CLOSE("", -1, "", "CLOSE"),
+      /** Awaiting application {@code bind}, {@code connect},  or {@code close} on socket (lsof).  **/
       IDLE("", -1, "", "IDLE"),
       ;
 

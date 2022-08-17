@@ -24,10 +24,10 @@ jobs:
   with-container-root:
     # uncomment to disable this job
     #if: ${{ false }}
-    name: Inside container centos ${{matrix.distribution}}-${{matrix.java}} as root
+    name: Inside container almalinux ${{matrix.distribution}}-${{matrix.java}} as root
     runs-on: ubuntu-latest
     container:
-      image: centos:latest
+      image: almalinux:latest
     strategy:
       matrix:
         java: [ 8, 11 ]
@@ -42,23 +42,25 @@ jobs:
         with:
           java-version: ${{matrix.java}}
           distribution: ${{matrix.distribution}}
+      - name: Install lsof
+        run: yum -y install lsof procps
       - name: Test with Maven
-        run: ./mvnw clean verify -V -B "-Dmaven.artifact.threads=64" "-Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn" -DskipToolchain "-Djava.version=${{matrix.java}}"
+        run: ./mvnw clean verify -V -B "-Dmaven.artifact.threads=64" "-Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn" -DskipToolchain "-Djava.version=${{matrix.java}}" "-Dmaven.javadoc.skip"
       - name: Upload Test Results
         if: always()
         uses: actions/upload-artifact@v2
         with:
-          name: Test Results (container centos ${{matrix.distribution}}-${{matrix.java}} as root)
+          name: Test Results (container almalinux ${{matrix.distribution}}-${{matrix.java}} as root)
           path: |
             **/target/surefire-reports/**
             **/target/rat.txt
   with-container-user:
     # uncomment to disable this job
     #if: ${{ false }}
-    name: Inside container centos ${{matrix.distribution}}-${{matrix.java}} as user
+    name: Inside container almalinux ${{matrix.distribution}}-${{matrix.java}} as user
     runs-on: ubuntu-latest
     container:
-      image: centos:latest
+      image: almalinux:latest
       options: --user 1001:1001
     strategy:
       matrix:
@@ -79,12 +81,12 @@ jobs:
         # This issue is impacting any code computing paths based on "user.home"
         # A widely known workaround is then to pass it manually.
         # Details: https://bugs.openjdk.java.net/browse/JDK-8193433
-        run: export MAVEN_OPTS=-Duser.home=$HOME && export JAVA_OPTS=-Duser.home=$HOME && ./mvnw clean verify -V -B "-Dmaven.artifact.threads=64" "-Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn" -DskipToolchain "-Djava.version=${{matrix.java}}"
+        run: export MAVEN_OPTS=-Duser.home=$HOME && export JAVA_OPTS=-Duser.home=$HOME && ./mvnw clean verify -V -B "-Dmaven.artifact.threads=64" "-Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn" -DskipToolchain "-Djava.version=${{matrix.java}}" "-Dmaven.javadoc.skip"
       - name: Upload Test Results
         if: always()
         uses: actions/upload-artifact@v2
         with:
-          name: Test Results (container centos ${{matrix.distribution}}-${{matrix.java}} as user)
+          name: Test Results (container almalinux ${{matrix.distribution}}-${{matrix.java}} as user)
           path: |
             **/target/surefire-reports/**
             **/target/rat.txt
@@ -109,7 +111,7 @@ jobs:
           java-version: ${{matrix.java}}
           distribution: ${{matrix.distribution}}
       - name: Test with Maven
-        run: ./mvnw clean verify -V -B "-Dmaven.artifact.threads=64" "-Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn" -DskipToolchain "-Djava.version=${{matrix.java}}"
+        run: ./mvnw clean verify -V -B "-Dmaven.artifact.threads=64" "-Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn" -DskipToolchain "-Djava.version=${{matrix.java}}" "-Dmaven.javadoc.skip"
       - name: Upload Test Results
         if: always()
         uses: actions/upload-artifact@v2

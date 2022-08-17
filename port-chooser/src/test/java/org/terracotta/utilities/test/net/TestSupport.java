@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Terracotta, Inc., a Software AG company.
+ * Copyright 2020-2022 Terracotta, Inc., a Software AG company.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,8 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
 /**
  * Static methods for to aid testing of {@link NetStat} and {@link PortManager}.
@@ -36,7 +38,8 @@ public final class TestSupport {
 
   private static final String[] SUDO_VERSION = new String[] { "sudo", "-V" };
   private static final String[] LSOF_VERSION = new String[] { "lsof", "-v" };
-  private static final String[] SUDO_LSOF_TCP = new String[] { "sudo", "--non-interactive", "--", "lsof", "-nP", "-iTCP", "-F", "n" };
+  private static final String[] LSOF_TCP = new String[] { "lsof", "-nP", "-iTCP", "-F", "n" };
+  private static final String[] SUDO_PREFIX = new String[] { "sudo", "--non-interactive", "--" };
 
   private TestSupport() {}
 
@@ -82,11 +85,52 @@ public final class TestSupport {
      * Both 'sudo' and 'lsof' are available on PATH.  Now check to see if 'sudo --non-interactive -- lsof -nP -iTCP -F n'
      * works and returns any useful results.
      */
+    String[] sudoLsofTcp = Arrays.copyOf(SUDO_PREFIX, SUDO_PREFIX.length + LSOF_TCP.length);
+    System.arraycopy(LSOF_TCP, 0, sudoLsofTcp, SUDO_PREFIX.length, LSOF_TCP.length);
+    return tryLsof(sudoLsofTcp);
+  }
+
+  /**
+   * Determines if {@code lsof -nP -iTCP ...} can be used to get TCP port information.
+   * This method ensures the following:
+   * <ol>
+   *   <li>{@code lsof} is available in {@code PATH}</li>
+   * </ol>
+   * ({@code lsof -nP -iTCP} will fail to return results if the platform implementation of {@code /proc} does
+   * not include sufficient for the network stack.)
+   *
+   * @return {@code true} if {@code lsof -nP -iTCP} returns expected results;
+   *    {@code false} otherwise
+   */
+  public static boolean lsofWorks() {
+
+    /*
+     * lsof is only used on Linux -- see org.terracotta.utilities.test.net.NetStat.Platform.LINUX
+     */
+    if (!Os.isLinux()) {
+      return true;
+    }
+
+    /*
+     * Ensure 'lsof' is accessible from PATH by getting its version.
+     */
+    if (!checkCommand(LSOF_VERSION)) {
+      return false;
+    }
+
+    /*
+     * 'lsof' is available on PATH.  Now check to see if 'lsof -nP -iTCP -F n'
+     * works and returns any useful results.
+     */
+    return tryLsof(LSOF_TCP);
+  }
+
+  private static boolean tryLsof(String[] lsofCommand) {
     try {
-      Shell.Result result = Shell.execute(Shell.Encoding.CHARSET, SUDO_LSOF_TCP);
+      Shell.Result result = Shell.execute(Shell.Encoding.CHARSET, lsofCommand);
       if (result.exitCode() == 0) {
         /*
-         * '-F n' causes the output to be "parsable" and include only groups od process IDs and network numbers.
+         * '-F n' causes the output to be "parsable" and include only groups of process IDs, FDs, and network numbers.
          * Ensure we actually got process groups with network numbers.
          */
         Map<String, List<String>> portsPerProcess = new LinkedHashMap<>();
@@ -96,41 +140,60 @@ public final class TestSupport {
             case 'p':
               currentProcess = portsPerProcess.get(line);
               if (currentProcess != null) {
-                LOGGER.warn("Unexpected output from {}: multiple '{}'", Arrays.toString(SUDO_LSOF_TCP), escape(line));
+                LOGGER.warn("Unexpected output from {}: multiple '{}'{}",
+                    Arrays.toString(lsofCommand), escape(line), collectEscapedLines(result));
                 return false;
               }
               currentProcess = new ArrayList<>();
               portsPerProcess.put(line, currentProcess);
               break;
-            case 'n':
+            case 'f':
               if (currentProcess == null) {
-                LOGGER.warn("Unexpected output from {}; missing process '{}'", Arrays.toString(SUDO_LSOF_TCP), escape(line));
+                LOGGER.warn("Unexpected output from {}; missing process '{}'{}",
+                    Arrays.toString(lsofCommand), escape(line), collectEscapedLines(result));
                 return false;
               }
               break;
+            case 'n':
+              if (currentProcess == null) {
+                LOGGER.warn("Unexpected output from {}; missing process '{}'{}",
+                    Arrays.toString(lsofCommand), escape(line), collectEscapedLines(result));
+                return false;
+              }
+              currentProcess.add(line);
+              break;
             default:
-              LOGGER.warn("Unexpected output from {}: '{}'", Arrays.toString(SUDO_LSOF_TCP), escape(line));
+              LOGGER.warn("Unexpected output from {}: '{}'{}",
+                  Arrays.toString(lsofCommand), escape(line), collectEscapedLines(result));
               return false;
           }
         }
 
         if (portsPerProcess.isEmpty() || portsPerProcess.values().stream().allMatch(List::isEmpty)) {
-          String messages = "\n    " + String.join("\n    ", result);
-          LOGGER.debug("{} returned no ports:{}", Arrays.toString(SUDO_LSOF_TCP), messages);
+          LOGGER.debug("{} returned no ports:{}", Arrays.toString(lsofCommand), collectEscapedLines(result));
           return false;
         }
 
         return true;
 
       } else {
-        String messages = "\n    " + String.join("\n    ", result);
-        LOGGER.debug("Failed to run {}; rc={}{}", Arrays.toString(SUDO_LSOF_TCP), result.exitCode(), messages);
+        LOGGER.debug("Failed to run {}; rc={}{}", Arrays.toString(lsofCommand), result.exitCode(), collectEscapedLines(result));
         return false;
       }
     } catch (IOException e) {
-      LOGGER.debug("Failed to run {}", Arrays.toString(SUDO_LSOF_TCP), e);
+      LOGGER.debug("Failed to run {}", Arrays.toString(lsofCommand), e);
       return false;
     }
+  }
+
+  private static String collectEscapedLines(Iterable<String> lines) {
+    String messages = StreamSupport.stream(lines.spliterator(), false)
+        .map(TestSupport::escape)
+        .collect(Collectors.joining("\n    "));
+    if (!messages.isEmpty()) {
+      messages = "\n    " + messages;
+    }
+    return messages;
   }
 
   private static boolean checkCommand(String[] command) {

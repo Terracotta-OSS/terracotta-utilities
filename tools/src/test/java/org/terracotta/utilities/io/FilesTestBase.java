@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Terracotta, Inc., a Software AG company.
+ * Copyright 2020-2022 Terracotta, Inc., a Software AG company.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -74,6 +74,8 @@ import static java.nio.file.Files.readSymbolicLink;
 import static java.nio.file.Files.write;
 import static java.util.Collections.singleton;
 import static java.util.Objects.requireNonNull;
+import static java.util.stream.Collectors.collectingAndThen;
+import static java.util.stream.Collectors.toSet;
 import static org.junit.Assume.assumeTrue;
 import static org.terracotta.utilities.exec.Shell.execute;
 
@@ -561,7 +563,7 @@ public abstract class FilesTestBase {
     private final Duration holdTime;
     private final Phaser barrier = new Phaser(2);
 
-    private AtomicBoolean started = new AtomicBoolean(false);
+    private final AtomicBoolean started = new AtomicBoolean(false);
 
     /**
      * Creates a {@code PathHolder} to hold a file open until the {@code PathHolder} instance is closed.
@@ -693,6 +695,8 @@ public abstract class FilesTestBase {
     }
     private final Path path;
     private final Set<FileType> types;
+    private final Set<String> attributeViews;
+    private final String fileStoreType;
     private final long size;
     private final FileTime creationTime;
     private final FileTime lastAccessTime;
@@ -711,6 +715,10 @@ public abstract class FilesTestBase {
     private final Path linkTarget;
 
     public PathDetails(Path root, Path path, boolean followLinks) throws IOException {
+      FileStore fileStore = getFileStore((java.nio.file.Files.exists(path) ? path : root));
+      this.fileStoreType = fileStore.type();
+      this.attributeViews = supportedAttributeViews(path, fileStore);
+
       if (path.startsWith(root)) {
         this.path = root.relativize(path);
       } else {
@@ -722,8 +730,14 @@ public abstract class FilesTestBase {
 
       BasicFileAttributes attrs = null;
 
+      /*
+       * While Linux may, in general, support the "dos" view, NFS mounted file stores do not.
+       * Unfortunately, getFileAttributeView returns an in-effective "dos" view which, when accessed,
+       * throws a FileSystemException "hiding" an ENOTSUP error code ("Operation not supported").
+       * Checking the FileStore support for the "dos" view avoids this issue.
+       */
       DosFileAttributeView dosFileAttributeView = getFileAttributeView(path, DosFileAttributeView.class, linkOptions);
-      if (dosFileAttributeView != null) {
+      if (dosFileAttributeView != null && this.attributeViews.contains("dos")) {
         Boolean isReadOnly, isSystem, isHidden, isArchive;
         try {
           DosFileAttributes dosAttrs = dosFileAttributeView.readAttributes();
@@ -774,7 +788,7 @@ public abstract class FilesTestBase {
       }
 
       PosixFileAttributeView posixFileAttributeView = getFileAttributeView(path, PosixFileAttributeView.class, linkOptions);
-      if (posixFileAttributeView != null) {
+      if (posixFileAttributeView != null && attributeViews.contains("posix")) {
         Set<PosixFilePermission> permissions;
         try {
           PosixFileAttributes posixFileAttributes = posixFileAttributeView.readAttributes();
@@ -856,7 +870,7 @@ public abstract class FilesTestBase {
       }
 
       /*
-       * If both are directories whether or not one or both are links, they're equal.
+       * If both are directories whether one or both are links, they're equal.
        * Otherwise, check the full complement.
        */
       if (!this.types.contains(FileType.DIRECTORY) || !that.types.contains(FileType.DIRECTORY)) {
@@ -871,24 +885,68 @@ public abstract class FilesTestBase {
         if (this.size != that.size) {
           return false;
         }
+
         if (compareAttributes) {
-          // Windows, at least, doesn't copy lastModifiedTime for non-files
-          return (!this.types.contains(FileType.FILE) || Objects.equals(this.lastModifiedTime, that.lastModifiedTime))
-              && Objects.equals(this.isReadOnly, that.isReadOnly)
-              && Objects.equals(this.isSystem, that.isSystem)
-              && Objects.equals(this.isHidden, that.isHidden)
-              && Objects.equals(this.isArchive, that.isArchive)
-              && Objects.equals(this.permissions, that.permissions);
+
+          // If both files reside in the same type of file store, compare the last modified time;
+          // if in different file stores, can't make reliable assertions regarding time.
+          boolean lastModifiedTimeEqual;
+          if (this.fileStoreType.equals(that.fileStoreType)) {
+            // Windows, at least, doesn't copy lastModifiedTime for non-files
+            lastModifiedTimeEqual =
+                !this.types.contains(FileType.FILE) || Objects.equals(this.lastModifiedTime, that.lastModifiedTime);
+          } else {
+            LOGGER.trace("Skipping time comparison: {} != {}", this.fileStoreType, that.fileStoreType);
+            lastModifiedTimeEqual = true;   // Don't fail if file stores are different
+          }
+
+          // If both files reside in a file store supporting "dos", compare DOS attributed
+          boolean dosAttributesEqual;
+          if (this.attributeViews.contains("dos") && that.attributeViews.contains("dos")) {
+            dosAttributesEqual = Objects.equals(this.isReadOnly, that.isReadOnly)
+                && Objects.equals(this.isSystem, that.isSystem)
+                && Objects.equals(this.isHidden, that.isHidden)
+                && Objects.equals(this.isArchive, that.isArchive);
+          } else {
+            LOGGER.trace("Skipping 'dos' attributes comparison: {} / {}", this.attributeViews, that.attributeViews);
+            dosAttributesEqual = true;    // Don't fail if file stores are different
+          }
+
+          // If both files reside in a file store supporting "posix", compare Posix attributes
+          boolean posixAttributesEqual;
+          if (this.attributeViews.contains("posix") && that.attributeViews.contains("posix")) {
+            posixAttributesEqual = Objects.equals(this.permissions, that.permissions);
+          } else {
+            LOGGER.trace("Skipping 'posix' attributes comparison: {} / {}", this.attributeViews, that.attributeViews);
+            posixAttributesEqual = true;    // Don't fail if file stores are different
+          }
+
+          return lastModifiedTimeEqual && dosAttributesEqual && posixAttributesEqual;
         }
       }
 
       return true;
     }
 
+    /**
+     * Determine what {@code FileAttributeView} types are supported for a path.
+     *
+     * @param fullPath  the fully-qualified path to interrogate
+     * @param fileStore the {@code FileStore} holding {@code fullPath}
+     * @return the set of supported views
+     */
+    private Set<String> supportedAttributeViews(Path fullPath, FileStore fileStore) {
+      return fullPath.getFileSystem().supportedFileAttributeViews().stream()
+          .filter(fileStore::supportsFileAttributeView)
+          .collect(collectingAndThen(toSet(), Collections::unmodifiableSet));
+    }
+
     @Override
     public String toString() {
       return "PathDetails{" +
           "path=" + path +
+          ", fileStoreType=" + fileStoreType +
+          ", attributeViews=" + attributeViews +
           ", types=" + types +
           ", size=" + size +
           ", isReadOnly=" + isReadOnly +
