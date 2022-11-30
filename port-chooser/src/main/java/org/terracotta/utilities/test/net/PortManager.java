@@ -586,14 +586,18 @@ public class PortManager {
     }
 
     if (disableCheck) {
-      try {
-        AccessController.doPrivileged(
-            (PrivilegedAction<String>)() -> System.setProperty(DISABLE_PORT_RELEASE_CHECK_PROPERTY, "true"));
-        LOGGER.warn("Further use of diagnostic busy port check in this JVM disabled");
-      } catch (SecurityException exception) {
-        LOGGER.debug("Failed to disable further use of diagnostic busy port check", exception);
-      }
+      disablePortReleaseCheck();
+    }
+  }
 
+  @SuppressWarnings("removal")    // Needed for Java 17
+  private static void disablePortReleaseCheck() {
+    try {
+      AccessController.doPrivileged(
+          (PrivilegedAction<String>)() -> System.setProperty(DISABLE_PORT_RELEASE_CHECK_PROPERTY, "true"));
+      LOGGER.warn("Further use of diagnostic busy port check in this JVM disabled");
+    } catch (SecurityException exception) {
+      LOGGER.debug("Failed to disable further use of diagnostic busy port check", exception);
     }
   }
 
