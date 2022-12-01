@@ -47,10 +47,16 @@ import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFileAttributes;
 import java.nio.file.attribute.PosixFilePermission;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.time.temporal.Temporal;
+import java.time.temporal.TemporalUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.EnumSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -894,7 +900,7 @@ public abstract class FilesTestBase {
           if (this.fileStoreType.equals(that.fileStoreType)) {
             // Windows, at least, doesn't copy lastModifiedTime for non-files
             lastModifiedTimeEqual =
-                !this.types.contains(FileType.FILE) || Objects.equals(this.lastModifiedTime, that.lastModifiedTime);
+                !this.types.contains(FileType.FILE) || equalsWithinCommonResolution(this.lastModifiedTime, that.lastModifiedTime);
           } else {
             LOGGER.trace("Skipping time comparison: {} != {}", this.fileStoreType, that.fileStoreType);
             lastModifiedTimeEqual = true;   // Don't fail if file stores are different
@@ -926,6 +932,106 @@ public abstract class FilesTestBase {
       }
 
       return true;
+    }
+
+    /**
+     * Tests the equality of two {@link FileTime} instances to the lowest resolution common between the two values.
+     * @param a the first {@code FileTime} to compare
+     * @param b the second {@code FileTime} to compare
+     * @return {@code true} if {@code a} and {@code b} are equal within the lowest common resolution
+     */
+    private static boolean equalsWithinCommonResolution(FileTime a, FileTime b) {
+      if (Objects.equals(a, b)) {
+        return true;
+      } else {
+        TemporalUnit aResolution = calculateResolution(a);
+        TemporalUnit bResolution = calculateResolution(b);
+        Instant aInstant = a.toInstant();
+        Instant bInstant = b.toInstant();
+        int aVsB = Comparator.comparing(TemporalUnit::getDuration).compare(aResolution, bResolution);
+        if (aVsB < 0) {
+          // b has a lower resolution than a; truncate to b's resolution
+          aInstant = aInstant.truncatedTo(bResolution);
+        } else if (aVsB > 0) {
+          // a has a lower resolution than b; truncate to a's resolution
+          bInstant = bInstant.truncatedTo(aResolution);
+        }
+        return Objects.equals(aInstant, bInstant);
+      }
+    }
+
+    /**
+     * Timestamp resolution for NTFS.
+     * @see <a href="https://learn.microsoft.com/en-us/windows/win32/sysinfo/file-times">File Times</a>
+     */
+    private static final TemporalUnit NTFS_RESOLUTION = new TemporalUnit() {
+      private final Duration duration = Duration.ofNanos(100L);
+
+      @Override
+      public Duration getDuration() {
+        return duration;
+      }
+
+      @Override
+      public boolean isDurationEstimated() {
+        return false;
+      }
+
+      @Override
+      public boolean isDateBased() {
+        return false;
+      }
+
+      @Override
+      public boolean isTimeBased() {
+        return true;
+      }
+
+      @SuppressWarnings("unchecked")
+      @Override
+      public <R extends Temporal> R addTo(R temporal, long amount) {
+        return (R) temporal.plus(amount, this);
+      }
+
+      @Override
+      public long between(Temporal temporal1Inclusive, Temporal temporal2Exclusive) {
+        return temporal1Inclusive.until(temporal2Exclusive, this);
+      }
+
+      @Override
+      public String toString() {
+        return "NTFS";
+      }
+    };
+
+    /**
+     * Ordered set of <i>supported</i> {@link FileTime} resolutions.
+     */
+    private static final Set<TemporalUnit> RESOLUTIONS;
+    static {
+      // Ordered as required for testing/discovery
+      Set<TemporalUnit> resolutions = new LinkedHashSet<>();
+      resolutions.add(ChronoUnit.SECONDS);
+      resolutions.add(ChronoUnit.MILLIS);
+      resolutions.add(ChronoUnit.MICROS);
+      resolutions.add(NTFS_RESOLUTION);
+      resolutions.add(ChronoUnit.NANOS);
+      RESOLUTIONS = Collections.unmodifiableSet(resolutions);
+    }
+
+    /**
+     * Calculates the resolution of the {@code FileTime} provided.
+     * @param fileTime the {@code FileTime} for which the resolution is determined
+     * @return the {@code TemporalUnit} describing the resolution of {@code fileTime}
+     */
+    private static TemporalUnit calculateResolution(FileTime fileTime) {
+      Instant instant = fileTime.toInstant();
+      for (TemporalUnit unit : RESOLUTIONS) {
+        if (instant.equals(instant.truncatedTo(unit))) {
+          return unit;
+        }
+      }
+      return ChronoUnit.MINUTES;      // Use MINUTES if no other resolution fits
     }
 
     /**
