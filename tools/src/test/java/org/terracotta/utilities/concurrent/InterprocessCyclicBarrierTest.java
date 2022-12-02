@@ -412,12 +412,14 @@ public class InterprocessCyclicBarrierTest  {
     try (DiagnosticThreadDump dumpTask = DiagnosticThreadDump.schedule(testName.getMethodName(), TIMER, 5L, TimeUnit.SECONDS)) {
       Path syncFile = temporaryFolder.newFile(testName.getMethodName()).toPath();
       ExecutorService executorService = Executors.newFixedThreadPool(2);
+      CyclicBarrier participantBarrier = new CyclicBarrier(2);
       CyclicBarrier observerBarrier = new CyclicBarrier(3);
       try (InterprocessCyclicBarrier barrier = new InterprocessCyclicBarrier(2, syncFile)) {
 
         // First task -- this task waits
         Future<Void> waitingTask = executorService.submit(() -> {
           InterprocessCyclicBarrier.Participant participant = barrier.register();
+          participantBarrier.await();
           observerBarrier.await();      // Align everyone to participant registration
           participant.await();
           fail("Expecting BrokenBarrierException");
@@ -426,6 +428,7 @@ public class InterprocessCyclicBarrierTest  {
 
         // Second task -- this task interrupts register
         Future<Void> interruptedTask = executorService.submit(() -> {
+          participantBarrier.await();
           Thread.currentThread().interrupt();
           try {
             barrier.register();
