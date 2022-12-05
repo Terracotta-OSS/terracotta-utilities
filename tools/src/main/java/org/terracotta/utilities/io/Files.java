@@ -494,6 +494,7 @@ public final class Files {
     Objects.requireNonNull(progressHelper, "progressHelper must be non-null");
 
     // Get the permission checks out of the way ...
+    @SuppressWarnings("removal")    // Needed for Java 17
     SecurityManager securityManager = System.getSecurityManager();
     if (securityManager != null) {
       securityManager.checkPermission(new FilePermission(path.toString(), "read,write,delete"));
@@ -610,6 +611,7 @@ public final class Files {
     Objects.requireNonNull(progressHelper, "progressHelper must be non-null");
 
     // Get the permission checks out of the way ...
+    @SuppressWarnings("removal")    // Needed for Java 17
     SecurityManager securityManager = System.getSecurityManager();
     if (securityManager != null) {
       securityManager.checkPermission(new FilePermission(path.toString(), "read,write,delete"));
@@ -796,6 +798,7 @@ public final class Files {
     boolean recursive = copyOptions.contains(ExtendedOption.RECURSIVE);
     LinkOption[] linkOptions = (noFollowLinks ? new LinkOption[] { NOFOLLOW_LINKS } : new LinkOption[0]);
 
+    @SuppressWarnings("removal")    // Needed for Java 17
     SecurityManager securityManager = System.getSecurityManager();
     if (securityManager != null) {
       securityManager.checkPermission(new FilePermission(source.toString(), "read"));
@@ -946,6 +949,7 @@ public final class Files {
       LOGGER.debug("copy(InputStream, {}, {})", resolvedTarget, Arrays.toString(options));
     }
 
+    @SuppressWarnings("removal")    // Needed for Java 17
     SecurityManager securityManager = System.getSecurityManager();
     if (securityManager != null) {
       securityManager.checkPermission(new FilePermission(resolvedTarget.toString(), "read,write" + (replace ? ",delete" : "")));
