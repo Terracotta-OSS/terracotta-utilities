@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Copyright 2020 Terracotta, Inc., a Software AG company.
+  Copyright 2020-2023 Terracotta, Inc., a Software AG company.
 
   Licensed under the Apache License, Version 2.0 (the "License");
   you may not use this file except in compliance with the License.
@@ -30,6 +30,10 @@
   <name>Terracotta Utilities Tools</name>
   <description>Utility classes/methods for common Java tasks</description>
   <url>https://github.com/Terracotta-OSS/terracotta-utilities/</url>
+
+  <properties>
+    <java17.test.skip>true</java17.test.skip>
+  </properties>
 
   <licenses>
     <license>
@@ -73,6 +77,30 @@
   <build>
     <plugins>
       <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <executions>
+          <execution>
+            <!-- DumpUtilityTest needs add-opens option for complete testing under Java 17+. -->
+            <id>java17</id>
+            <configuration>
+              <skip>${java17.test.skip}</skip><!-- Run IFF running Java 17+ -->
+              <includes>
+                <include>org.terracotta.utilities.io.buffer.DumpUtilityTest</include>
+              </includes>
+              <jvm>${java.home}/bin/java</jvm>
+              <argLine>--add-opens java.base/java.nio=ALL-UNNAMED</argLine>
+              <reportNameSuffix>java17</reportNameSuffix>
+            </configuration>
+            <phase>test</phase>
+            <goals>
+              <goal>test</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <plugin>
         <groupId>org.apache.rat</groupId>
         <artifactId>apache-rat-plugin</artifactId>
         <configuration>
@@ -83,6 +111,19 @@
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <profile>
+      <id>Java17+</id>
+      <!-- Enable tests configured for Java 17+ -->
+      <activation>
+        <jdk>[17,)</jdk>
+      </activation>
+      <properties>
+        <java17.test.skip>false</java17.test.skip>
+      </properties>
+    </profile>
+  </profiles>
 
   <scm>
     <connection>scm:git:https://github.com/terracotta-oss/terracotta-utilities.git</connection>
