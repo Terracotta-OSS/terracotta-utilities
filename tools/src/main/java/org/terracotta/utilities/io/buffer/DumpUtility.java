@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Terracotta, Inc., a Software AG company.
+ * Copyright 2020-2023 Terracotta, Inc., a Software AG company.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,9 @@ package org.terracotta.utilities.io.buffer;
 
 import java.io.PrintStream;
 import java.lang.reflect.Field;
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
 import java.nio.charset.CharsetEncoder;
@@ -47,6 +49,17 @@ import static java.util.Objects.requireNonNull;
  *   <li>{@link #dumpBuffer(LongBuffer)}</li>
  *   <li>{@link #dumpBuffer(LongBuffer, PrintStream)}</li>
  * </ul>
+ * Under Java 17+, the {@code --add-opens java.base/java.nio=ALL-UNNAMED} option <b>must</b> be added to
+ * the JVM options in order to dump {@code LongBuffer} and {@code IntBuffer} instances.
+ *
+ * <h3>Examples</h3>
+ * To dump to an Slf4J log, {@code DumpUtility} can be combined with
+ * {@link org.terracotta.utilities.logging.LoggingOutputStream LoggingOutputStream} as in the following:
+ * <pre>{@code
+ *     try (LoggingOutputStream loggingStream = new LoggingOutputStream(LoggerFactory.getLogger("dump"), Level.INFO);
+ *          PrintStream printStream = new PrintStream(loggingStream, false, StandardCharsets.UTF_8.name())) {
+ *       DumpUtility.dumpBuffer(buffer, printStream);
+ *     }}</pre>
  */
 @SuppressWarnings("UnusedDeclaration")
 public final class DumpUtility {
@@ -79,7 +92,8 @@ public final class DumpUtility {
   /**
    * Constructs a new {@code DumpUtility} using the {@code PrintStream} and line prefix provided.
    * @param printStream the {@code PrintStream} to which the dump is written
-   * @param linePrefix the value to prepend to each dump line written
+   * @param linePrefix the value to prepend to each dump line written; no space is added between
+   *                   {@code linePrefix} and the dump line
    */
   public DumpUtility(PrintStream printStream, CharSequence linePrefix) {
     this.printStream = requireNonNull(printStream, "printStream");
@@ -163,7 +177,7 @@ public final class DumpUtility {
 
     String bufferClassName = buffer.getClass().getName();
     String byteBufferFieldName;
-    if (bufferClassName.equals("java.nio.ByteBufferAsInfBufferB")
+    if (bufferClassName.equals("java.nio.ByteBufferAsIntBufferB")
         || bufferClassName.equals("java.nio.ByteBufferAsIntBufferL")
         || bufferClassName.equals("java.nio.ByteBufferAsIntBufferRB")
         || bufferClassName.equals("java.nio.ByteBufferAsIntBufferRL")) {
@@ -176,9 +190,10 @@ public final class DumpUtility {
       byteBufferFieldName = "att";
 
     } else {
-      throw new UnsupportedOperationException(String.format("LongBuffer type not supported: %s", bufferClassName));
+      throw new UnsupportedOperationException(String.format("IntBuffer type not supported: %s", bufferClassName));
     }
 
+    describeBuffer(buffer);
     dumpBuffer(getFieldValue(ByteBuffer.class, buffer, byteBufferFieldName));
   }
 
@@ -217,6 +232,7 @@ public final class DumpUtility {
       throw new UnsupportedOperationException(String.format("LongBuffer type not supported: %s", bufferClassName));
     }
 
+    describeBuffer(buffer);
     dumpBuffer(getFieldValue(ByteBuffer.class, buffer, byteBufferFieldName));
   }
 
@@ -247,18 +263,7 @@ public final class DumpUtility {
       return;
     }
 
-    printStream.format("%s    ByteOrder=%s; capacity=%d (0x%<X); limit=%d (0x%<X); position=%d (0x%<X)",
-        linePrefix, buffer.order(), buffer.capacity(), buffer.limit(), buffer.position());
-    if (buffer.isDirect()) {
-      try {
-        long address = getFieldValue(Long.class, buffer, "address", true);
-        printStream.format("; address=0x%X%n", address);
-      } catch (FieldInaccessibleException e) {
-        printStream.println();
-      }
-    } else {
-      printStream.println();
-    }
+    describeBuffer(buffer);
 
     ByteBuffer view = buffer.asReadOnlyBuffer();
     view.clear();
@@ -286,6 +291,34 @@ public final class DumpUtility {
     dumpBufferInternal(ByteBuffer.wrap(bytes));
   }
 
+  /**
+   * Writes a description of the {@code Buffer} supplied to the print stream for this {@code DumpUtility} instance.
+   * @param buffer the buffer to describe
+   */
+  private void describeBuffer(Buffer buffer) {
+    ByteOrder order;
+    if (buffer instanceof ByteBuffer) {
+      order = ((ByteBuffer)buffer).order();
+    } else if (buffer instanceof LongBuffer) {
+      order = ((LongBuffer)buffer).order();
+    } else if (buffer instanceof IntBuffer) {
+      order = ((IntBuffer)buffer).order();
+    } else {
+      order = null;
+    }
+    printStream.format("%s    ByteOrder=%s; capacity=%d (0x%<X); limit=%d (0x%<X); position=%d (0x%<X)",
+        linePrefix, order, buffer.capacity(), buffer.limit(), buffer.position());
+
+    if (buffer.isDirect()) {
+      try {
+        long address = getFieldValue(Long.class, buffer, "address", true);
+        printStream.format("; address=0x%X", address);
+      } catch (FieldInaccessibleException ignored) {
+      }
+    }
+
+    printStream.println();
+  }
 
   private void dumpBufferInternal(ByteBuffer view) {
     int segmentSize = 32;
@@ -441,6 +474,7 @@ public final class DumpUtility {
    * @throws FieldInaccessibleException if an error occurs while attempting to access the field
    * @throws AssertionError if the field {@code fieldName} contains {@code null}
    */
+  @SuppressWarnings("JavaReflectionMemberAccess")
   private <V, T> V getFieldValue(Class<V> expectedType, T instance, String fieldName, boolean quiet) {
     V fieldValue;
     try {
@@ -474,9 +508,28 @@ public final class DumpUtility {
             linePrefix, instance.getClass().getSimpleName(), fieldName, getObjectId(fieldValue));
       }
 
-    } catch (NoSuchFieldException | IllegalAccessException e) {
-      throw new FieldInaccessibleException(String.format("Unable to get '%s' field from %s instance: %s",
-          fieldName, instance.getClass().getName(), e), e);
+    } catch (RuntimeException | NoSuchFieldException | IllegalAccessException e) {
+      String addOpens = "";
+      if (e instanceof RuntimeException) {
+        // For Java 17+, need to use '--add-opens java.base/java.nio=ALL-UNNAMED'
+        if (e.getClass().getName().equals("java.lang.reflect.InaccessibleObjectException")) {
+          Object jvmModule;
+          try {
+            jvmModule = Class.forName("java.lang.Module")
+                .getMethod("getName")
+                .invoke(Class.class.getMethod("getModule").invoke(instance.getClass()));
+          } catch (ReflectiveOperationException ex) {
+            jvmModule = "?UNKNOWN?";
+          }
+          String classPackage = instance.getClass().getPackage().getName();
+          addOpens = String.format(";%n    add JVM option \"--add-opens %s/%s=ALL-UNNAMED\"", jvmModule, classPackage);
+        } else {
+          throw (RuntimeException)e;
+        }
+      }
+      throw new FieldInaccessibleException(
+          String.format("Unable to access '%s' field from %s instance%s", fieldName, instance.getClass().getName(), addOpens),
+          e);
     }
     return fieldValue;
   }
