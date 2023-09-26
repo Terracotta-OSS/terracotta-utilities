@@ -28,13 +28,14 @@ import java.nio.channels.FileLock;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileSystemException;
+import java.nio.file.FileVisitResult;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -162,6 +163,22 @@ class FilesSupport {
    * @return a {@code Set} of {@link FileSystemException#getReason()} values warranting retry
    */
   private static Set<String> calculateReasons() {
+    try {
+      return calculateReasons(java.nio.file.Files.createTempDirectory("top"));
+    } catch (IOException e) {
+      LOGGER.trace("Unexpected I/O error constructing failure reasons", e);
+      return Collections.emptySet();
+    }
+  }
+
+  /**
+   * Testing seam.
+   *
+   * @see #calculateReasons()
+   */
+  //Better a dead store than a missed update to a file path
+  @SuppressFBWarnings("DLS_DEAD_LOCAL_STORE")
+  static Set<String> calculateReasons(Path top) throws IOException {
     /*
      * First, set up a directory tree to use for test file operations.
      *
@@ -171,112 +188,124 @@ class FilesSupport {
      *                        /   \
      *                     file1  file2
      */
-    Path file2;
-    Path file1;
-    Path dir;
-    Path top;
     try {
-      top = java.nio.file.Files.createTempDirectory("top");
-      top.toFile().deleteOnExit();
-
-      dir = java.nio.file.Files.createDirectory(top.resolve("dir"));
-      dir.toFile().deleteOnExit();
-
-      file1 = java.nio.file.Files.createFile(dir.resolve("file1"));
-      file1.toFile().deleteOnExit();
+      Path dir = java.nio.file.Files.createDirectory(top.resolve("dir"));
+      Path file1 = java.nio.file.Files.createFile(dir.resolve("file1"));
       java.nio.file.Files.write(file1, Collections.singleton("file1"), StandardCharsets.UTF_8);
-
-      file2 = java.nio.file.Files.createFile(dir.resolve("file2"));
-      file2.toFile().deleteOnExit();
+      Path file2 = java.nio.file.Files.createFile(dir.resolve("file2"));
       java.nio.file.Files.write(file1, Collections.singleton("file2"), StandardCharsets.UTF_8);
-    } catch (IOException e) {
-      LOGGER.trace("Unexpected I/O error constructing failure reasons", e);
-      return Collections.emptySet();
-    }
 
-    Set<String> reasons = new LinkedHashSet<>();
+      Set<String> reasons = new LinkedHashSet<>();
 
-    /*
-     * File is open for read versus move/rename.
-     */
-    try (PathHolder holder = new PathHolder(file1, false)) {
-      holder.start();
-      file1 = java.nio.file.Files.move(file1, file1.resolveSibling("renamed"), StandardCopyOption.ATOMIC_MOVE);
-    } catch (FileSystemException e) {
-      reasons.add(e.getReason());
-      LOGGER.trace("Observed for file/file OPEN rename {} '{}'", e.getClass().getSimpleName(), e.getReason());
-    } catch (Exception e) {
-      // Nothing we can do about this ...
-      LOGGER.trace("Unexpected IOException renaming {}", file1, e);
-    }
+      /*
+       * File is open for read versus move/rename.
+       */
+      try (PathHolder holder = new PathHolder(file1, false)) {
+        holder.start();
+        file1 = java.nio.file.Files.move(file1, file1.resolveSibling("file1_renamed1"), StandardCopyOption.ATOMIC_MOVE);
+      } catch (FileSystemException e) {
+        reasons.add(e.getReason());
+        LOGGER.trace("Observed for file/file OPEN rename {} '{}'", e.getClass().getSimpleName(), e.getReason());
+      } catch (Exception e) {
+        // Nothing we can do about this ...
+        LOGGER.trace("Unexpected IOException renaming {}", file1, e);
+      }
 
-    /*
-     * File is open for read versus directory move/rename.
-     */
-    try (PathHolder holder = new PathHolder(file1, false)) {
-      holder.start();
-      dir = java.nio.file.Files.move(dir, dir.resolveSibling("renamed"), StandardCopyOption.ATOMIC_MOVE);
-    } catch (FileSystemException e) {
-      reasons.add(e.getReason());
-      LOGGER.trace("Observed for file/dir OPEN rename {} '{}'", e.getClass().getSimpleName(), e.getReason());
-    } catch (Exception e) {
-      // Nothing we can do about this ...
-      LOGGER.trace("Unexpected IOException renaming {}", file1, e);
-    }
+      /*
+       * File is open for read versus directory move/rename.
+       */
+      try (PathHolder holder = new PathHolder(file1, false)) {
+        holder.start();
+        dir = java.nio.file.Files.move(dir, dir.resolveSibling("dir_renamed1"), StandardCopyOption.ATOMIC_MOVE);
+        file1 = dir.resolve(file1.getFileName());
+        file2 = dir.resolve(file2.getFileName());
+      } catch (FileSystemException e) {
+        reasons.add(e.getReason());
+        LOGGER.trace("Observed for file/dir OPEN rename {} '{}'", e.getClass().getSimpleName(), e.getReason());
+      } catch (Exception e) {
+        // Nothing we can do about this ...
+        LOGGER.trace("Unexpected IOException renaming {}", dir, e);
+      }
 
-    /*
-     * File locked versus move/rename.
-     */
-    try (PathHolder holder = new PathHolder(file1, true)) {
-      holder.start();
-      file1 = java.nio.file.Files.move(file1, file1.resolveSibling("renamed"), StandardCopyOption.ATOMIC_MOVE);
-    } catch (FileSystemException e) {
-      reasons.add(e.getReason());
-      LOGGER.trace("Observed for file/file LOCKED rename {} '{}'", e.getClass().getSimpleName(), e.getReason());
-    } catch (Exception e) {
-      // Nothing we can do about this ...
-      LOGGER.trace("Unexpected IOException renaming {}", file1, e);
-    }
+      /*
+       * File locked versus move/rename.
+       */
+      try (PathHolder holder = new PathHolder(file1, true)) {
+        holder.start();
+        file1 = java.nio.file.Files.move(file1, file1.resolveSibling("file1_renamed2"), StandardCopyOption.ATOMIC_MOVE);
+      } catch (FileSystemException e) {
+        reasons.add(e.getReason());
+        LOGGER.trace("Observed for file/file LOCKED rename {} '{}'", e.getClass().getSimpleName(), e.getReason());
+      } catch (Exception e) {
+        // Nothing we can do about this ...
+        LOGGER.trace("Unexpected IOException renaming {}", file1, e);
+      }
 
-    /*
-     * File locked versus directory move/rename.
-     */
-    try (PathHolder holder = new PathHolder(file1, true)) {
-      holder.start();
-      dir = java.nio.file.Files.move(dir, dir.resolveSibling("renamed"), StandardCopyOption.ATOMIC_MOVE);
-    } catch (FileSystemException e) {
-      reasons.add(e.getReason());
-      LOGGER.trace("Observed for file/dir LOCKED rename {} '{}'", e.getClass().getSimpleName(), e.getReason());
-    } catch (Exception e) {
-      // Nothing we can do about this ...
-      LOGGER.trace("Unexpected IOException renaming {}", file1, e);
-    }
+      /*
+       * File locked versus directory move/rename.
+       */
+      try (PathHolder holder = new PathHolder(file1, true)) {
+        holder.start();
+        dir = java.nio.file.Files.move(dir, dir.resolveSibling("dir_renamed2"), StandardCopyOption.ATOMIC_MOVE);
+        file1 = dir.resolve(file1.getFileName());
+        file2 = dir.resolve(file2.getFileName());
+      } catch (FileSystemException e) {
+        reasons.add(e.getReason());
+        LOGGER.trace("Observed for file/dir LOCKED rename {} '{}'", e.getClass().getSimpleName(), e.getReason());
+      } catch (Exception e) {
+        // Nothing we can do about this ...
+        LOGGER.trace("Unexpected IOException renaming {}", dir, e);
+      }
 
-    /*
-     * Directory is open for read versus file move/rename.
-     */
-    try (PathHolder holder = new PathHolder(dir, false)) {
-      holder.start();
-      file1 = java.nio.file.Files.move(file1, file1.resolveSibling("renamed"), StandardCopyOption.ATOMIC_MOVE);
-      LOGGER.trace("Succeeded dir/file rename");
-    } catch (FileSystemException e) {
-      reasons.add(e.getReason());
-      LOGGER.trace("Observed for dir/file rename {} '{}'", e.getClass().getSimpleName(), e.getReason());
-    } catch (IOException e) {
-      // Nothing we can do about this ...
-      LOGGER.trace("Unexpected IOException renaming {}", file1, e);
-    }
-
-    for (Path path : Arrays.asList(file2, file1, dir, top)) {
-      try {
-        java.nio.file.Files.deleteIfExists(path);
+      /*
+       * Directory is open for read versus file move/rename.
+       */
+      try (PathHolder holder = new PathHolder(dir, false)) {
+        holder.start();
+        file1 = java.nio.file.Files.move(file1, file1.resolveSibling("file1_renamed3"), StandardCopyOption.ATOMIC_MOVE);
+        LOGGER.trace("Succeeded dir/file rename");
+      } catch (FileSystemException e) {
+        reasons.add(e.getReason());
+        LOGGER.trace("Observed for dir/file rename {} '{}'", e.getClass().getSimpleName(), e.getReason());
       } catch (IOException e) {
-        // Ignore ... will delete at shutdown if possible
-        LOGGER.trace("Cannot delete {}", path, e);
+        // Nothing we can do about this ...
+        LOGGER.trace("Unexpected IOException renaming {}", file1, e);
+      }
+      return reasons;
+    } finally {
+      try {
+        java.nio.file.Files.walkFileTree(top, new SimpleFileVisitor<Path>() {
+
+          @Override
+          public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+            delete(file);
+            return FileVisitResult.CONTINUE;
+          }
+
+          @Override
+          public FileVisitResult visitFileFailed(Path file, IOException exc) {
+            return FileVisitResult.CONTINUE;
+          }
+
+          @Override
+          public FileVisitResult postVisitDirectory(Path dir, IOException exc) {
+            delete(dir);
+            return FileVisitResult.CONTINUE;
+          }
+
+          private void delete(Path path) {
+            try {
+              java.nio.file.Files.delete(path);
+            } catch (IOException e) {
+              LOGGER.trace("Cannot delete {}", path, e);
+              path.toFile().deleteOnExit();
+            }
+          }
+        });
+      } catch (IOException f) {
+        LOGGER.trace("Cannot delete {}", top, f);
       }
     }
-
-    return reasons;
   }
 
   /**
@@ -291,7 +320,7 @@ class FilesSupport {
     private final Thread thread;
     private final Phaser barrier = new Phaser(2);
 
-    private AtomicBoolean started = new AtomicBoolean(false);
+    private final AtomicBoolean started = new AtomicBoolean(false);
 
     private PathHolder(Path path, boolean lock) throws IOException {
       requireNonNull(path, "path");
@@ -354,7 +383,7 @@ class FilesSupport {
       LOGGER.trace("Lock ended on \"{}\"", file);
     }
 
-    @SuppressFBWarnings("DLS_DEAD_LOCAL_STORE")
+    @SuppressFBWarnings({"DLS_DEAD_LOCAL_STORE", "RCN_REDUNDANT_NULLCHECK_WOULD_HAVE_BEEN_A_NPE"})
     private void holdDirectory(Path dir) {
       LOGGER.trace("Hold on \"{}\" beginning", dir);
       try (DirectoryStream<Path> directoryStream = java.nio.file.Files.newDirectoryStream(dir)) {

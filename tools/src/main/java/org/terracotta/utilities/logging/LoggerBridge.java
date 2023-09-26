@@ -16,16 +16,16 @@
 package org.terracotta.utilities.logging;
 
 import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.slf4j.event.Level;
 
 import java.lang.invoke.MethodHandle;
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.MethodType;
-import java.util.AbstractMap;
-import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
+import static java.lang.invoke.MethodHandles.publicLookup;
+import static java.lang.invoke.MethodType.methodType;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -35,10 +35,13 @@ import static java.util.Objects.requireNonNull;
  * by {@link #getInstance(Logger, Level)}.
  */
 public final class LoggerBridge {
-  private static final Map<Map.Entry<Logger, Level>, LoggerBridge> INSTANCES = new HashMap<>();
+  private static final Logger LOGGER = LoggerFactory.getLogger(LoggerBridge.class);
 
-  private final Logger delegate;
-  private final Level level;
+  private static final Map<Logger, Map<Level, LoggerBridge>> INSTANCES = new ConcurrentHashMap<>();
+  private static final Map<Level, MethodHandle> IS_LEVEL_ENABLED = new ConcurrentHashMap<>();
+  private static final Map<Level, MethodHandle> LOG = new ConcurrentHashMap<>();
+  private static final Map<Level, MethodHandle> LOG_THROWABLE = new ConcurrentHashMap<>();
+
   private final MethodHandle isLevelEnabled;
   private final MethodHandle log;
   private final MethodHandle logThrowable;
@@ -49,10 +52,17 @@ public final class LoggerBridge {
    * @param delegate the {@code Logger} to which logging calls are delegated
    * @param level    the {@code Level} at which the returned {@code LoggingBridge} logs
    * @return a {@code LoggingBridge} instance
+   * @throws AssertionError if there is an error instantiating the required {@code LoggerBridge} instance
    */
   public static LoggerBridge getInstance(Logger delegate, Level level) {
-    return INSTANCES.computeIfAbsent(new AbstractMap.SimpleImmutableEntry<>(delegate, level),
-        e -> new LoggerBridge(e.getKey(), e.getValue()));
+    try {
+      return INSTANCES.computeIfAbsent(delegate, logger -> new ConcurrentHashMap<>())
+              .computeIfAbsent(level, lvl -> new LoggerBridge(delegate, lvl));
+    } catch (AssertionError e) {
+      LOGGER.error("Failed to obtain " + LoggerBridge.class.getSimpleName() + " instance for Logger \""
+          + delegate.getName() + "[" + level + "]\"", e);
+      throw e;
+    }
   }
 
   /**
@@ -61,57 +71,55 @@ public final class LoggerBridge {
    *
    * @param delegate the delegate {@code Logger}
    * @param level    the level at which the {@link #log} method records
+   * @throws AssertionError if there is an error instantiating the required {@code LoggerBridge} instance
    */
   private LoggerBridge(Logger delegate, Level level) {
-    this.delegate = requireNonNull(delegate, "delegate");
-    this.level = requireNonNull(level, "level");
+    requireNonNull(delegate, "delegate");
+    requireNonNull(level, "level");
+    this.isLevelEnabled = IS_LEVEL_ENABLED.computeIfAbsent(level, LoggerBridge::getIsLevelEnabledMethodHandle).bindTo(delegate);
+    this.log = LOG.computeIfAbsent(level, LoggerBridge::getLogMethodHandle).bindTo(delegate);
+    this.logThrowable = LOG_THROWABLE.computeIfAbsent(level, LoggerBridge::getLogThrowableMethodHandle).bindTo(delegate);
+  }
 
-    String levelName = level.name().toLowerCase(Locale.ROOT);
-    MethodHandles.Lookup lookup = MethodHandles.publicLookup();
-    MethodType type;
-
-    /*
-     * Find the boolean 'is<Level>Enabled'() method.
-     */
-    MethodHandle isLevelEnabled;
-    type = MethodType.methodType(boolean.class);
+  /*
+   * Find the boolean 'is<Level>Enabled'() method.
+   * @throws AssertionError constructing the require {@code MethodHandle}
+   */
+  private static MethodHandle getIsLevelEnabledMethodHandle(Level level) {
+    String levelName = level.name();
     try {
-      isLevelEnabled = lookup.findVirtual(Logger.class,
-          "is" + levelName.substring(0, 1).toUpperCase(Locale.ROOT) + levelName.substring(1) + "Enabled", type);
+      return publicLookup().findVirtual(Logger.class,
+              "is" + levelName.substring(0, 1).toUpperCase(Locale.ROOT)
+                      + levelName.substring(1).toLowerCase(Locale.ROOT) + "Enabled", methodType(Boolean.TYPE));
     } catch (NoSuchMethodException | IllegalAccessException e) {
-      isLevelEnabled = null;
-      delegate.error("Unable to resolve '{} {}({})' method on {}; will log at INFO level",
-          type.returnType(), levelName, type.parameterList(), Logger.class, e);
+      throw new AssertionError(e);
     }
-    this.isLevelEnabled = isLevelEnabled;
+  }
 
-    /*
-     * Find the void '<level>'(String, Object...) method.
-     */
-    MethodHandle log;
-    type = MethodType.methodType(void.class, String.class, Object[].class);
+  /*
+   * Find the void '<level>'(String, Object...) method.
+   * @throws AssertionError constructing the require {@code MethodHandle}
+   */
+  private static MethodHandle getLogMethodHandle(Level level) {
+    String methodName = level.name().toLowerCase(Locale.ROOT);
     try {
-      log = lookup.findVirtual(Logger.class, levelName, type);
+      return publicLookup().findVirtual(Logger.class, methodName, methodType(void.class, String.class, Object[].class));
     } catch (NoSuchMethodException | IllegalAccessException e) {
-      log = null;
-      delegate.error("Unable to resolve '{} {}({})' method on {}; will log at INFO level",
-          type.returnType(), levelName, type.parameterList(), Logger.class, e);
+      throw new AssertionError(e);
     }
-    this.log = log;
+  }
 
-    /*
-     * Find the void '<level>'(String, Throwable) method.
-     */
-    MethodHandle logThrowable;
-    type = MethodType.methodType(void.class, String.class, Throwable.class);
+  /*
+   * Find the void '<level>'(String, Throwable) method.
+   * @throws AssertionError constructing the require {@code MethodHandle}
+   */
+  private static MethodHandle getLogThrowableMethodHandle(Level level) {
+    String methodName = level.name().toLowerCase(Locale.ROOT);
     try {
-      logThrowable = lookup.findVirtual(Logger.class, levelName, type);
+      return publicLookup().findVirtual(Logger.class, methodName, methodType(void.class, String.class, Throwable.class));
     } catch (NoSuchMethodException | IllegalAccessException e) {
-      logThrowable = null;
-      delegate.error("Unable to resolve '{} {}({})' method on {}; will log at INFO level",
-          type.returnType(), levelName, type.parameterList(), Logger.class, e);
+      throw new AssertionError(e);
     }
-    this.logThrowable = logThrowable;
   }
 
   /**
@@ -121,57 +129,44 @@ public final class LoggerBridge {
    * of this {@code LoggerBridge}
    */
   public boolean isLevelEnabled() {
-    if (isLevelEnabled != null) {
-      try {
-        return (boolean)isLevelEnabled.invokeExact(delegate);
-      } catch (Throwable throwable) {
-        delegate.error("Failed to call {}; presuming {} is enabled", isLevelEnabled, level, throwable);
-        return true;
-      }
-    } else {
-      return delegate.isInfoEnabled();
+    try {
+      return (boolean)isLevelEnabled.invokeExact();
+    } catch (RuntimeException | Error e) {
+      throw e;
+    } catch (Throwable t) {
+      throw new AssertionError(t);
     }
   }
 
   /**
    * Submits a log event to the delegate logger at the level of this {@code LoggerBridge}.
-   * If the virtual call to the log method fails, the log event is recorded at the {@code INFO}
-   * level.
    *
    * @param format    the log message format
    * @param arguments the arguments for the message
    */
   public void log(String format, Object... arguments) {
-    if (log != null) {
-      try {
-        log.invokeExact(delegate, format, arguments);
-      } catch (Throwable throwable) {
-        delegate.error("Failed to call {}; logging at INFO level", log, throwable);
-        delegate.info(format, arguments);
-      }
-    } else {
-      delegate.info(format, arguments);
+    try {
+      log.invokeExact(format, arguments);
+    } catch (RuntimeException | Error e) {
+      throw e;
+    } catch (Throwable e) {
+      throw new AssertionError(e);
     }
   }
 
   /**
    * Submits a log event to the delegate logger at the level of this {@code LoggerBridge}.
-   * If the virtual call to the log method fails, the log event is recorded at the {@code INFO}
-   * level.
    *
    * @param message the log message format
    * @param t the {@code Throwable} to log with {@code message}
    */
   public void log(String message, Throwable t) {
-    if (logThrowable != null) {
-      try {
-        logThrowable.invokeExact(delegate, message, t);
-      } catch (Throwable throwable) {
-        delegate.error("Failed to call {}; logging at INFO level", logThrowable, throwable);
-        delegate.info(message, t);
-      }
-    } else {
-      delegate.info(message, t);
+    try {
+      logThrowable.invokeExact(message, t);
+    } catch (RuntimeException | Error e) {
+      throw e;
+    } catch (Throwable e) {
+      throw new AssertionError(e);
     }
   }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Terracotta, Inc., a Software AG company.
+ * Copyright 2020-2022 Terracotta, Inc., a Software AG company.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.terracotta.utilities.test.net.PortManager.PortRef.CloseOption;
 
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
@@ -35,22 +36,31 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
+import java.security.AccessController;
+import java.security.PrivilegedAction;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Random;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 import java.util.function.IntUnaryOperator;
 
 import static java.lang.Integer.toHexString;
 import static java.lang.System.identityHashCode;
 import static java.util.Objects.requireNonNull;
+import static java.util.stream.Collectors.joining;
+import static java.util.stream.Collectors.toList;
+import static org.terracotta.utilities.test.net.PortManager.PortRef.CloseOption.NO_RELEASE_CHECK;
 
 /**
  * Manages TCP port reservation/de-reservation while attempting to avoid
@@ -66,9 +76,54 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * All users of {@code PortManager} in a JVM must use the same {@code PortManager}
  * instance to ensure proper intra-JVM reservations.
+ * <p>
+ * By default, release of an assigned port back to {@code PortManager} (via {@link PortRef#close()}
+ * or garbage collection of a weakly-reachable {@code PortRef} instance) performs a check that
+ * the port is actually unused.  This involves querying both the in-use ports and active processes
+ * on the system and, on some systems, could be a time-consuming activity.  While the check is
+ * intended to identify "outside" interference with ports assigned by {@code PortManager}, it
+ * is possible to disable this check by setting the {@value #DISABLE_PORT_RELEASE_CHECK_PROPERTY}
+ * property or {@value #DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE} environment variable to {@code true}.
+ * The property value is examined each time the release check is
+ * performed so the check may be disabled for some tests and left enabled for others; the environment
+ * variable is only examined when the {@code PortManger} class is loaded.
  */
 public class PortManager {
+  /**
+   * Property checked for <i>disabling</i> the port release check performed at the time
+   * a port obtained from {@code PortManager} is returned to {@code PortManager}.
+   */
+  public static final String DISABLE_PORT_RELEASE_CHECK_PROPERTY = "org.terracotta.disablePortReleaseCheck";
+
+  /**
+   * Environment variable checked for disabling the port release check performed at the time a port
+   * obtained from PortManager is returned to PortManger.
+   */
+  public static final String DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE = "DISABLE_PORT_RELEASE_CHECK";
+
   private static final Logger LOGGER = LoggerFactory.getLogger(PortManager.class);
+
+  /**
+   * Reflects the value of the {@value #DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE} environment variable.  If the
+   * environment variable is set to a case-insensitive value of {@code true}, the port release
+   * check will be disabled.
+   * <p>
+   * The value of the environment variable is only checked when this class is loaded; changes to the
+   * environment variable after this class is loaded are not detected.
+   */
+  private static final boolean DISABLE_PORT_RELEASE_CHECK;
+
+  static {
+    boolean disablePortReleaseCheck = false;
+    try {
+      disablePortReleaseCheck = Boolean.parseBoolean(System.getenv(DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE));
+      if (disablePortReleaseCheck) {
+        LOGGER.warn("Port release check disabled by environment variable {}=true", DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE);
+      }
+    } catch (SecurityException ignored) {
+    }
+    DISABLE_PORT_RELEASE_CHECK = disablePortReleaseCheck;
+  }
 
   private static final PortManager INSTANCE = new PortManager();
   static {
@@ -102,7 +157,11 @@ public class PortManager {
 
   private final Random rnd = new SecureRandom();
 
-  private final BitSet reservedPorts = new BitSet();
+  /**
+   * Marks the ports which cannot be allocated by this class.  A {@code true}
+   * bit in this {@code BitSet} indicates a non-reservable (restricted) port.
+   */
+  private final BitSet restrictedPorts = new BitSet();
 
   /**
    * Port allocation map.  A zero bit represents an available port.
@@ -148,7 +207,14 @@ public class PortManager {
     EphemeralPorts.Range range = EphemeralPorts.getRange();
     portMap.set(range.getLower(), range.getUpper() + 1);
 
-    reservedPorts.or(portMap);
+    /*
+     * Prevent assignment of any reserved ports on the platform.
+     */
+    for (EphemeralPorts.Range reservedRange : ReservedPorts.getRange()) {
+      portMap.set(reservedRange.getLower(), reservedRange.getUpper() + 1);
+    }
+
+    restrictedPorts.or(portMap);
 
     assignablePortCount = MAXIMUM_PORT_NUMBER + 1 - portMap.cardinality();
     if (assignablePortCount < MINIMUM_ASSIGNABLE_PORT_COUNT) {
@@ -157,6 +223,52 @@ public class PortManager {
               "\n*****************************************************************************************",
           assignablePortCount, range);
     }
+  }
+
+  /**
+   * Indicates if the designated port is in the range of ports that <i>may</i> be allocated
+   * by this class.  If the designated port is in the range of ports that may be allocated,
+   * the {@link #reserve(int)} method may be used to attempt to allocate the port.  The port
+   * may also be returned from the {@link #reservePort()} and {@link #reservePorts(int)} methods.
+   * @param port the port number to test
+   * @return {@code true} if {@code port} may be reserved using {@link #reserve(int)}; {@code false}
+   *    if {@code port} is not a reservable port.  A {@code true} result is <b>not</b> an indication
+   *    that {@code port} is currently available to be reserved.
+   * @throws IllegalArgumentException if {@code port} is not between 0 and
+   *    {@value #MAXIMUM_PORT_NUMBER} (inclusive)
+   */
+  public boolean isReservablePort(int port) {
+    if (port < 0 || port > MAXIMUM_PORT_NUMBER) {
+      throw new IllegalArgumentException("Port " + port + " is not a valid port number");
+    }
+    return !restrictedPorts.get(port);
+  }
+
+  /**
+   * Gets the <i>active</i> {@link PortRef} instance for the designated port.
+   * <p>
+   * This method returns a reference to the most recent {@code PortRef} created
+   * for the designated port if the {@code PortRef} is both <i>strongly reachable</i>
+   * and not closed.  The result of this method may be immediately stale -- the
+   * {@code PortRef} may be closed between the time the {@code PortRef} is checked
+   * and the reference returned to the called.
+   * @param port the port number for which the {@code PortRef} is returned
+   * @return an {@code Optional} of the {@code PortRef} for {@code port} if the
+   *      {@code PortRef} is both strongly reachable and not closed;
+   *      {@code Optional.empty} if the {@code PortRef} for {@code port} is either
+   *      not strongly reachable or closed
+   * @throws IllegalArgumentException if {@code port} is not between 0 and
+   *    {@value #MAXIMUM_PORT_NUMBER} (inclusive) or is not a reservable port
+   */
+  public synchronized Optional<PortRef> getPortRef(int port) {
+    if (!isReservablePort(port)) {
+      throw new IllegalArgumentException("Port " + port + " is not reservable");
+    }
+
+    cleanReleasedPorts();
+    return Optional.ofNullable(allocatedPorts.get(port))
+        .map(AllocatedPort::get)
+        .filter(portRef -> !portRef.isClosed());
   }
 
   /**
@@ -176,10 +288,7 @@ public class PortManager {
    * @throws IllegalStateException if reservation fails due to an error
    */
   public synchronized Optional<PortRef> reserve(int port) {
-    if (port < 0 || port > MAXIMUM_PORT_NUMBER) {
-      throw new IllegalArgumentException("Port " + port + " is not a valid port number");
-    }
-    if (reservedPorts.get(port)) {
+    if (!isReservablePort(port)) {
       throw new IllegalArgumentException("Port " + port + " is not reservable");
     }
 
@@ -250,7 +359,7 @@ public class PortManager {
      * Get a starting point for a free port search that's not a system or ephemeral port.
      */
     int startingPoint;
-    while (reservedPorts.get(startingPoint = rnd.nextInt(MAXIMUM_PORT_NUMBER + 1))) {
+    while (restrictedPorts.get(startingPoint = rnd.nextInt(MAXIMUM_PORT_NUMBER + 1))) {
       // empty
     }
     LOGGER.trace("Starting port reservation search at {}", startingPoint);
@@ -326,7 +435,7 @@ public class PortManager {
       // 1) Mark the port reserved in presumption the vetting will succeed
       portMap.set(candidatePort);
       allocatedPorts.put(portRef.port, new AllocatedPort(portRef, dereferencedPorts));
-      portRef.onClose(() -> release(candidatePort));
+      portRef.onClose(this::release);
 
       // 2) Create a server Socket for the candidate port
       boolean systemLevelLockHeld;
@@ -350,6 +459,7 @@ public class PortManager {
               classLoader.getClass().getSimpleName(),
               toHexString(identityHashCode(classLoader)));
           releaseRequired = false;   // Vetting successful; don't close PortRef on exit
+          portRef.onClose(this::diagnosticReleaseCheck);
           return portRef;
         } else {
           LOGGER.trace("Port {} failed refusesConnect", candidatePort);
@@ -383,7 +493,7 @@ public class PortManager {
     return null;
   }
 
-  private synchronized void release(int port) {
+  private synchronized void release(int port, Set<CloseOption> options) {
     portMap.clear(port);
     allocatedPorts.remove(port);
     LOGGER.info("Port {} released (JVM-level)", port);
@@ -431,6 +541,64 @@ public class PortManager {
     }
 
     return isFree;
+  }
+
+  /**
+   * Checks that the port being released is actually free and emits a detailed log message
+   * if not.  This check is <b>not</b> performed if the {@value #DISABLE_PORT_RELEASE_CHECK_PROPERTY}
+   * system property or the {@value #DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE} environment variable
+   * is set to {@code true}.
+   * @param port the port to check
+   * @param options the set of {@link CloseOption} members used to influence the release check
+   */
+  private void diagnosticReleaseCheck(int port, Set<CloseOption> options) {
+    if (DISABLE_PORT_RELEASE_CHECK | options.contains(NO_RELEASE_CHECK)) {
+      // Silently return
+      return;
+    }
+    if (Boolean.getBoolean(DISABLE_PORT_RELEASE_CHECK_PROPERTY)) {
+      LOGGER.info("Port {} release check for disabled by {}=true", port, DISABLE_PORT_RELEASE_CHECK_PROPERTY);
+      return;
+    }
+
+    boolean disableCheck = false;
+    try {
+      List<NetStat.BusyPort> portInfo = NetStat.info(port);
+      if (portInfo.isEmpty()) {
+        // An empty list for a single port is normal -- the port is no longer in use
+        LOGGER.trace("No busy port information obtained to verify release of port {}", port);
+      } else {
+        List<NetStat.BusyPort> collisions = portInfo.stream()
+            .filter(p -> p.state() != NetStat.BusyPort.TcpState.TIME_WAIT)    // Exclude TIME_WAIT
+            .filter(p -> p.localEndpoint().getPort() == port)
+            .collect(toList());
+        if (!collisions.isEmpty()) {
+          LOGGER.error("Port {} being released to PortManager is in use by the following:\n{}",
+              port, collisions.stream()
+                  .map(NetStat.BusyPort::toString)
+                  .map(s -> "    " + s)
+                  .collect(joining("\n")));
+        }
+      }
+    } catch (RuntimeException e) {
+      LOGGER.warn("Unable to obtain busy port information to verify release of port {}", port, e);
+      disableCheck = true;
+    }
+
+    if (disableCheck) {
+      disablePortReleaseCheck();
+    }
+  }
+
+  @SuppressWarnings("removal")    // Needed for Java 17
+  private static void disablePortReleaseCheck() {
+    try {
+      AccessController.doPrivileged(
+          (PrivilegedAction<String>)() -> System.setProperty(DISABLE_PORT_RELEASE_CHECK_PROPERTY, "true"));
+      LOGGER.warn("Further use of diagnostic busy port check in this JVM disabled");
+    } catch (SecurityException exception) {
+      LOGGER.debug("Failed to disable further use of diagnostic busy port check", exception);
+    }
   }
 
   @SuppressFBWarnings("DE_MIGHT_IGNORE")
@@ -481,7 +649,7 @@ public class PortManager {
    */
   private static class AllocatedPort extends WeakReference<PortRef> {
     private final int port;
-    private final AtomicReference<Runnable> closer;
+    private final AtomicReference<BiConsumer<Integer, Set<CloseOption>>> closer;
     private AllocatedPort(PortRef referent, ReferenceQueue<? super PortRef> q) {
       super(referent, q);
       this.port = referent.port();
@@ -490,7 +658,8 @@ public class PortManager {
 
     private void release() {
       try {
-        Optional.ofNullable(this.closer.get()).ifPresent(Runnable::run);
+        Optional.ofNullable(this.closer.get())
+            .ifPresent(action -> action.accept(port, EnumSet.noneOf(CloseOption.class)));
       } catch (Exception ignored) {
       }
     }
@@ -502,7 +671,9 @@ public class PortManager {
    */
   public static class PortRef implements AutoCloseable {
     private final int port;
-    private final AtomicReference<Runnable> closers = new AtomicReference<>(() -> {});
+    private final AtomicReference<BiConsumer<Integer, Set<CloseOption>>> closers =
+        new AtomicReference<>((port, options) -> {});
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     private PortRef(int port) {
       this.port = port;
@@ -510,10 +681,11 @@ public class PortManager {
 
     /**
      * Prepends a close action to this {@code PortRef}.  Actions are executed
-     * in reverse order of their addition.
+     * in reverse order of their addition.  Each action is passed the port
+     * number being closed.
      * @param action the action to take to close this {@code PortRef} instance
      */
-    void onClose(Runnable action) {
+    void onClose(BiConsumer<Integer, Set<CloseOption>> action) {
       closers.accumulateAndGet(action, PortManager::combine);
     }
 
@@ -521,7 +693,7 @@ public class PortManager {
      * Gets the "closers" {@code AtomicReference} for use during weak-reference release.
      * @return the {@code AtomicReference} instance to call for closing this {@code PortRef}
      */
-    private AtomicReference<Runnable> closers() {
+    private AtomicReference<BiConsumer<Integer, Set<CloseOption>>> closers() {
       return closers;
     }
 
@@ -534,35 +706,66 @@ public class PortManager {
     }
 
     /**
+     * Returns whether or not this {@code PortRef} is closed.
+     * @return {@code true} if this {@code PortRef} has been closed; {@code false} otherwise
+     */
+    public boolean isClosed() {
+      return closed.get();
+    }
+
+    /**
      * Closes this {@code PortRef}.
      */
     @Override
     public void close() {
-      Optional.ofNullable(closers.getAndSet(null)).ifPresent(Runnable::run);
+      this.close(EnumSet.noneOf(CloseOption.class));
+    }
+
+    /**
+     * Closes this {@code PortRef} using the options provided.
+     * @param options the set of {@link CloseOption}s to apply to this close call; may be empty but not {@code null}
+     */
+    public void close(Set<CloseOption> options) {
+      requireNonNull(options, "options");
+      if (closed.compareAndSet(false, true)) {
+        Optional.ofNullable(closers.getAndSet(null)).ifPresent(action -> action.accept(port, options));
+      }
+    }
+
+    /**
+     * Options that may be used with {@link #close(Set)}.
+     */
+    public enum CloseOption {
+      /**
+       * Indicates that no busy check should be performed when closing the {@code PortRef} and
+       * releasing a port. This option should be used only when it is known that the port has not
+       * been used and cannot be busy.
+       */
+      NO_RELEASE_CHECK
     }
   }
 
   /**
-   * Combines {@code Runnable} instances to run in reverse sequence.
-   * @param a the second {@code Runnable} to run
-   * @param b the first {@code Runnable} to run
-   * @return a new {@code Runnable} running {@code b} then {@code a}
+   * Combines {@code BiConsumer} instances to run in reverse sequence.
+   * @param a the second {@code BiConsumer} to run
+   * @param b the first {@code BiConsumer} to run
+   * @return a new {@code BiConsumer} running {@code b} then {@code a}
    */
-  private static Runnable combine(Runnable a, Runnable b) {
+  private static <T, U> BiConsumer<T, U> combine(BiConsumer<T, U> a, BiConsumer<T, U> b) {
     requireNonNull(a, "a");
     requireNonNull(b, "b");
-    return () -> {
+    return (t, u) -> {
       try {
-        b.run();
+        b.accept(t, u);
       } catch (Throwable t1) {
         try {
-          a.run();
+          a.accept(t, u);
         } catch (Throwable t2) {
           t1.addSuppressed(t2);
         }
         throw t1;
       }
-      a.run();
+      a.accept(t, u);
     };
   }
 

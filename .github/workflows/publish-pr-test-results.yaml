@@ -1,0 +1,38 @@
+# this workflow is publishing in the upstream repository test results
+# obtained from PR build (from fork's branches)
+# More info: https://github.com/EnricoMi/publish-unit-test-result-action/blob/v1.20/README.md#support-fork-repositories-and-dependabot-branches
+name: Publish Tests Results (PR builds)
+on:
+  workflow_run:
+    workflows: [ "CI" ]
+    types:
+      - completed
+jobs:
+  publish-pr-test-results:
+    name: Publish Tests Results (PR builds)
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion != 'skipped' }}
+    steps:
+      - name: Download and Extract Artifacts
+        env:
+          GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+        run: |
+          mkdir -p artifacts && cd artifacts          
+          artifacts_url=${{ github.event.workflow_run.artifacts_url }}
+          gh api "$artifacts_url" -q '.artifacts[] | [.name, .archive_download_url] | @tsv' | while read artifact
+          do
+            IFS=$'\t' read name url <<< "$artifact"
+            gh api $url > "$name.zip"
+            unzip -d "$name" "$name.zip"
+          done
+      - name: Publish Tests Results (PR builds)
+        uses: EnricoMi/publish-unit-test-result-action@v1
+        if: hashFiles('artifacts/Event File/event.json') != ''
+        with:
+          report_individual_runs: true
+          comment_mode: update last
+          check_name: Tests Results
+          commit: ${{ github.event.workflow_run.head_sha }}
+          event_file: artifacts/Event File/event.json
+          event_name: ${{ github.event.workflow_run.event }}
+          files: "**/target/surefire-reports/**/*.xml"

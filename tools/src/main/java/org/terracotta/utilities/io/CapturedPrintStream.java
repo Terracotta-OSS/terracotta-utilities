@@ -52,21 +52,40 @@ public final class CapturedPrintStream extends PrintStream {
 
   /**
    * Gets a {@code BufferedReader} over the bytes written to this {@code PrintStream}.
-   * Bytes copied from the stream to the reader are converted to {@code UTF-8}.
+   * The content of this stream is not altered by this method.
    * @return a new {@code BufferedReader} over the bytes written to this stream
+   * @see #reset()
    */
   public BufferedReader getReader() {
-    flush();
     return new BufferedReader(new InputStreamReader(new ByteArrayInputStream(toByteArray()), StandardCharsets.UTF_8), 4096);
   }
 
-  private byte[] toByteArray() {
+  /**
+   * Discards the captured output.
+   */
+  public void reset() {
+    flush();
+    ((LocalBufferedOutputStream)out).reset();
+  }
+
+  /**
+   * Gets a copy of the content of this stream as a byte array.  The content of this
+   * stream is not altered by this method.
+   * @return a byte array containing a copy of the captured data
+   * @see #reset()
+   */
+  public byte[] toByteArray() {
+    flush();
     return ((LocalBufferedOutputStream)out).toByteArray();
   }
 
   private static final class LocalBufferedOutputStream extends BufferedOutputStream {
     LocalBufferedOutputStream(int size) {
       super(new ByteArrayOutputStream(size), size);
+    }
+
+    void reset() {
+      ((ByteArrayOutputStream)out).reset();
     }
 
     byte[] toByteArray() {

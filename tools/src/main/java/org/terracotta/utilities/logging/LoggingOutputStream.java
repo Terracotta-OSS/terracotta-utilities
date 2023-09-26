@@ -15,37 +15,42 @@
  */
 package org.terracotta.utilities.logging;
 
-import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
-
 import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.slf4j.event.Level;
 
 import java.io.IOException;
 import java.io.OutputStream;
 import java.lang.invoke.MethodHandle;
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.MethodType;
-import java.lang.invoke.WrongMethodTypeException;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+import static java.lang.invoke.MethodHandles.publicLookup;
+import static java.lang.invoke.MethodType.methodType;
 
 /**
  * Implements an {@code OutputStream} that forwards lines written to it to
  * a {@link Logger} at a specified level.  Bytes are accumulated by this
  * {@code OutputStream} until a {@link System#lineSeparator()} value is found;
  * once the line ending is found, the line is flushed to the logger.
+ * <p>
+ * Bytes written to a {@code LoggingOutputStream} instance must have been
+ * encoded using {@link StandardCharsets#UTF_8 UTF-8}.  This affects proper
+ * recognition of line separators and re-assembly of logged strings.
  */
 public class LoggingOutputStream extends OutputStream {
+  private static final Logger LOGGER = LoggerFactory.getLogger(LoggingOutputStream.class);
 
   public static final int DEFAULT_BUFFER_SIZE = 4096;
 
-  private final Logger logger;
+  private static final Map<Level, MethodHandle> LOG_METHODS = new ConcurrentHashMap<>();
+
   private final MethodHandle handle;
   private final boolean twoByteLineSeparator;
   private final byte eol;
   private final byte eolLeader;
-
-  @SuppressFBWarnings(value = "SS_SHOULD_BE_STATIC", justification = "Awaiting option to disable autoFlush")
-  private final boolean autoFlush = true;
 
   private volatile boolean closed = false;
   private byte[] buffer = new byte[DEFAULT_BUFFER_SIZE];
@@ -56,12 +61,19 @@ public class LoggingOutputStream extends OutputStream {
   /**
    * Creates a new {@code LoggingOutputStream} writing to the provided logger and the
    * specified level.
+   * <p>
+   * Bytes written to this {@code LoggingOutputStream} must be UTF-8 encoded characters.
    * @param logger the SLF4J {@code Logger} instance to which the stream should write
    * @param level the SLF4J level at which the stream is recorded to {@code logger}
    */
   public LoggingOutputStream(Logger logger, Level level) {
-    this.logger = logger;
-    this.handle = getHandle(level);
+    try {
+      this.handle = LOG_METHODS.computeIfAbsent(level, LoggingOutputStream::getHandle).bindTo(logger);
+    } catch (AssertionError e) {
+      LOGGER.error("Failed to create " + LoggingOutputStream.class.getSimpleName() + " instance for Logger \""
+          + logger.getName() + "[" + level + "]\"", e);
+      throw e;
+    }
 
     String lineSeparator = System.lineSeparator();
     this.twoByteLineSeparator = lineSeparator.length() == 2;
@@ -77,11 +89,9 @@ public class LoggingOutputStream extends OutputStream {
         haveLeader = true;        // Remember the leader; processed along with the next byte
       } else {
         if ((byte)b == eol) {
-          if (autoFlush) {
-            haveLeader = false;   // Awaited EOL received; leader consumed with EOL in flush
-            flushInternal();
-            return;
-          }
+          haveLeader = false;   // Awaited EOL received; leader consumed with EOL in flush
+          flushInternal();
+          return;
         }
 
         // Non-flushed EOL or a non-EOL byte, emit held leader
@@ -127,15 +137,10 @@ public class LoggingOutputStream extends OutputStream {
 
   private void log(String line) throws IOException {
     try {
-      handle.invokeExact(logger, line);
-    } catch (WrongMethodTypeException e) {
-      throw new AssertionError(String.format("Unexpected error calling %s: %s", handle, e), e);
+      handle.invokeExact(line);
+    } catch (RuntimeException | Error e) {
+      throw e;
     } catch (Throwable throwable) {
-      if (throwable instanceof Error) {
-        throw (Error)throwable;
-      } else if (throwable instanceof RuntimeException) {
-        throw (RuntimeException)throwable;
-      }
       throw new IOException(String.format("Unexpected error calling %s: %s", handle, throwable), throwable);
     }
   }
@@ -158,14 +163,12 @@ public class LoggingOutputStream extends OutputStream {
     }
   }
 
-  private MethodHandle getHandle(Level level) {
-    String levelName = level.name().toLowerCase();
-    MethodHandles.Lookup lookup = MethodHandles.publicLookup();
-    MethodType type = MethodType.methodType(void.class, String.class);
+  private static MethodHandle getHandle(Level level) {
+    String methodName = level.name().toLowerCase(Locale.ROOT);
     try {
-      return lookup.findVirtual(Logger.class, levelName, type);
+      return publicLookup().findVirtual(Logger.class, methodName, methodType(void.class, String.class));
     } catch (NoSuchMethodException | IllegalAccessException e) {
-      throw new AssertionError(String.format("Unable to resolve '%s %s(%s)' method on %s", type.returnType(), levelName, type.parameterList(), Logger.class), e);
+      throw new AssertionError(e);
     }
   }
 }

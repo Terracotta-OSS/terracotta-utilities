@@ -66,7 +66,7 @@ class SystemLevelLocker {
       lockFilePath = CommonFiles.createCommonAppFile(RELATIVE_LOCK_FILE_PATH);
 
       /*
-       * If the file returned is an existing file, it _should_ be readable and writable
+       * If the file returned is an existing file, it _should_ be readable and writable,
        * but we need to check ...
        */
       if (!Files.isReadable(lockFilePath)) {
@@ -99,7 +99,10 @@ class SystemLevelLocker {
       FileLock fileLock = openChannel.tryLock(port, 1, false);
       if (fileLock != null) {
         outstandingLocks++;
-        portRef.onClose(() -> release(port, fileLock));
+        portRef.onClose((p, o) -> {
+          assert p == port;
+          release(p, fileLock);
+        });
         LOGGER.info("Port {} reserved (system-level)", port);
         return true;
       } else {
@@ -140,7 +143,7 @@ class SystemLevelLocker {
   }
 
   /**
-   * Closes {@link #openChannel} if there are not outstanding locks.
+   * Closes {@link #openChannel} if there are no outstanding locks.
    */
   private void closeChannelIfUnused() {
     if (openChannel != null && outstandingLocks == 0) {

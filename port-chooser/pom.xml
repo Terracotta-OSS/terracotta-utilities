@@ -22,11 +22,10 @@
   <parent>
     <groupId>org.terracotta</groupId>
     <artifactId>terracotta-utilities-parent</artifactId>
-    <version>0.0-SNAPSHOT</version>
+    <version>0.0.17-SNAPSHOT</version>
     <relativePath>..</relativePath>
   </parent>
 
-  <groupId>org.terracotta</groupId>
   <artifactId>terracotta-utilities-port-chooser</artifactId>
   <name>Terracotta Utilities Port Chooser</name>
   <description>Utility classes for TCP port management</description>
@@ -48,6 +47,12 @@
       <groupId>org.terracotta</groupId>
       <artifactId>terracotta-utilities-tools</artifactId>
       <version>${project.version}</version>
+      <exclusions>
+        <exclusion>
+          <groupId>org.slf4j</groupId>
+          <artifactId>slf4j-api</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
     <dependency>
       <groupId>org.terracotta</groupId>
@@ -56,13 +61,13 @@
       <scope>test</scope>
     </dependency>
     <dependency>
-      <groupId>junit</groupId>
-      <artifactId>junit</artifactId>
+      <groupId>org.hamcrest</groupId>
+      <artifactId>hamcrest</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>
-      <groupId>org.hamcrest</groupId>
-      <artifactId>hamcrest</artifactId>
+      <groupId>junit</groupId>
+      <artifactId>junit</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>
@@ -73,12 +78,112 @@
     <dependency>
       <groupId>ch.qos.logback</groupId>
       <artifactId>logback-classic</artifactId>
+      <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>com.github.spotbugs</groupId>
       <artifactId>spotbugs-annotations</artifactId>
     </dependency>
   </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <!-- Most tests should run with DISABLE_PORT_RELEASE_CHECK false or unset -->
+          <excludedEnvironmentVariables>DISABLE_PORT_RELEASE_CHECK</excludedEnvironmentVariables>
+        </configuration>
+        <executions>
+          <execution>
+            <!-- Repeat tests using IPv4 preference -->
+            <id>IPv4_base</id>
+            <configuration>
+              <systemPropertyVariables>
+                <java.net.preferIPv4Stack>true</java.net.preferIPv4Stack>
+                <org.terracotta.disablePortReleaseCheck>false</org.terracotta.disablePortReleaseCheck>
+              </systemPropertyVariables>
+              <includes>
+                <include>org.terracotta.utilities.test.net.*Test</include>
+              </includes>
+              <excludes>
+                <!-- Single test run below. -->
+                <exclude>org.terracotta.utilities.test.net.PortManagerTest</exclude>
+              </excludes>
+              <reportNameSuffix>IPv4_base</reportNameSuffix>
+            </configuration>
+            <phase>test</phase>
+            <goals>
+              <goal>test</goal>
+            </goals>
+          </execution>
+          <execution>
+            <!-- Repeat tests using IPv4 preference - single test of long-running suite -->
+            <id>IPv4_A</id>
+            <configuration>
+              <systemPropertyVariables>
+                <java.net.preferIPv4Stack>true</java.net.preferIPv4Stack>
+                <org.terracotta.disablePortReleaseCheck>false</org.terracotta.disablePortReleaseCheck>
+              </systemPropertyVariables>
+              <test>org.terracotta.utilities.test.net.PortManagerTest#testReleaseCheckEnabled</test>
+              <reportNameSuffix>IPv4_A</reportNameSuffix>
+            </configuration>
+            <phase>test</phase>
+            <goals>
+              <goal>test</goal>
+            </goals>
+          </execution>
+          <execution>
+            <!-- Single test for DISABLE_PORT_RELEASE_CHECK=true -->
+            <id>PortCheckDisabled</id>
+            <configuration>
+              <environmentVariables>
+                <DISABLE_PORT_RELEASE_CHECK>true</DISABLE_PORT_RELEASE_CHECK>
+              </environmentVariables>
+              <test>org.terracotta.utilities.test.net.PortManagerTest#testReleaseCheckDisabledEnvironment</test>
+              <reportNameSuffix>PortCheckDisabled</reportNameSuffix>
+            </configuration>
+            <phase>test</phase>
+            <goals>
+              <goal>test</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+
+  <profiles>
+    <profile>
+      <!-- PlantUML diagram generation for javadoc requires Java 11+ -->
+      <id>plantuml-diagrams</id>
+      <activation>
+        <jdk>[11,)</jdk>
+        <property>
+          <name>maven.javadoc.skip</name>
+          <value>!true</value>
+        </property>
+      </activation>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>com.github.funthomas424242</groupId>
+            <artifactId>plantuml-maven-plugin</artifactId>
+            <executions>
+              <execution>
+                <id>plantuml</id>
+                <goals>
+                  <goal>generate</goal>
+                </goals>
+                <phase>generate-sources</phase>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 
   <scm>
     <connection>scm:git:https://github.com/terracotta-oss/terracotta-utilities.git</connection>

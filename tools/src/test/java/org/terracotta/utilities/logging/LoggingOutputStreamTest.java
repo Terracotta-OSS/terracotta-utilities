@@ -27,7 +27,9 @@ import org.slf4j.event.Level;
 import java.io.PrintStream;
 import java.util.Arrays;
 
+import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.stringContainsInOrder;
 import static org.junit.Assert.assertThat;
 
@@ -53,12 +55,19 @@ public class LoggingOutputStreamTest {
     }
 
     LoggingOutputStream loggingOutputStream = new LoggingOutputStream(logger, Level.INFO);
-    PrintStream out = new PrintStream(loggingOutputStream);
-
-    out.format("Recording to %s via %s%n", appender, logger);
-
+    try (PrintStream out = new PrintStream(loggingOutputStream)) {
+      out.format("Recording to %s via %s%n", appender, logger);
+    }
     assertThat(appender.list, hasSize(1));
     assertThat(appender.list.get(0).toString(),
         stringContainsInOrder(Arrays.asList("Recording to", appender.toString(), "via", logger.toString())));
+
+    appender.list.clear();
+
+    loggingOutputStream = new LoggingOutputStream(logger, Level.TRACE);
+    try (PrintStream out = new PrintStream(loggingOutputStream)) {
+      out.format("Recording to %s via %s%n", appender, logger);
+    }
+    assertThat(appender.list, is(empty()));
   }
 }

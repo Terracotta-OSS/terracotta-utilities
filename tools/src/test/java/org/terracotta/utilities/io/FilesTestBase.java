@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Terracotta, Inc., a Software AG company.
+ * Copyright 2020-2022 Terracotta, Inc., a Software AG company.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -47,10 +47,16 @@ import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFileAttributes;
 import java.nio.file.attribute.PosixFilePermission;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.time.temporal.Temporal;
+import java.time.temporal.TemporalUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.EnumSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -74,6 +80,8 @@ import static java.nio.file.Files.readSymbolicLink;
 import static java.nio.file.Files.write;
 import static java.util.Collections.singleton;
 import static java.util.Objects.requireNonNull;
+import static java.util.stream.Collectors.collectingAndThen;
+import static java.util.stream.Collectors.toSet;
 import static org.junit.Assume.assumeTrue;
 import static org.terracotta.utilities.exec.Shell.execute;
 
@@ -561,7 +569,7 @@ public abstract class FilesTestBase {
     private final Duration holdTime;
     private final Phaser barrier = new Phaser(2);
 
-    private AtomicBoolean started = new AtomicBoolean(false);
+    private final AtomicBoolean started = new AtomicBoolean(false);
 
     /**
      * Creates a {@code PathHolder} to hold a file open until the {@code PathHolder} instance is closed.
@@ -693,6 +701,8 @@ public abstract class FilesTestBase {
     }
     private final Path path;
     private final Set<FileType> types;
+    private final Set<String> attributeViews;
+    private final String fileStoreType;
     private final long size;
     private final FileTime creationTime;
     private final FileTime lastAccessTime;
@@ -711,6 +721,10 @@ public abstract class FilesTestBase {
     private final Path linkTarget;
 
     public PathDetails(Path root, Path path, boolean followLinks) throws IOException {
+      FileStore fileStore = getFileStore((java.nio.file.Files.exists(path) ? path : root));
+      this.fileStoreType = fileStore.type();
+      this.attributeViews = supportedAttributeViews(path, fileStore);
+
       if (path.startsWith(root)) {
         this.path = root.relativize(path);
       } else {
@@ -722,8 +736,14 @@ public abstract class FilesTestBase {
 
       BasicFileAttributes attrs = null;
 
+      /*
+       * While Linux may, in general, support the "dos" view, NFS mounted file stores do not.
+       * Unfortunately, getFileAttributeView returns an in-effective "dos" view which, when accessed,
+       * throws a FileSystemException "hiding" an ENOTSUP error code ("Operation not supported").
+       * Checking the FileStore support for the "dos" view avoids this issue.
+       */
       DosFileAttributeView dosFileAttributeView = getFileAttributeView(path, DosFileAttributeView.class, linkOptions);
-      if (dosFileAttributeView != null) {
+      if (dosFileAttributeView != null && this.attributeViews.contains("dos")) {
         Boolean isReadOnly, isSystem, isHidden, isArchive;
         try {
           DosFileAttributes dosAttrs = dosFileAttributeView.readAttributes();
@@ -774,7 +794,7 @@ public abstract class FilesTestBase {
       }
 
       PosixFileAttributeView posixFileAttributeView = getFileAttributeView(path, PosixFileAttributeView.class, linkOptions);
-      if (posixFileAttributeView != null) {
+      if (posixFileAttributeView != null && attributeViews.contains("posix")) {
         Set<PosixFilePermission> permissions;
         try {
           PosixFileAttributes posixFileAttributes = posixFileAttributeView.readAttributes();
@@ -856,7 +876,7 @@ public abstract class FilesTestBase {
       }
 
       /*
-       * If both are directories whether or not one or both are links, they're equal.
+       * If both are directories whether one or both are links, they're equal.
        * Otherwise, check the full complement.
        */
       if (!this.types.contains(FileType.DIRECTORY) || !that.types.contains(FileType.DIRECTORY)) {
@@ -871,24 +891,168 @@ public abstract class FilesTestBase {
         if (this.size != that.size) {
           return false;
         }
+
         if (compareAttributes) {
-          // Windows, at least, doesn't copy lastModifiedTime for non-files
-          return (!this.types.contains(FileType.FILE) || Objects.equals(this.lastModifiedTime, that.lastModifiedTime))
-              && Objects.equals(this.isReadOnly, that.isReadOnly)
-              && Objects.equals(this.isSystem, that.isSystem)
-              && Objects.equals(this.isHidden, that.isHidden)
-              && Objects.equals(this.isArchive, that.isArchive)
-              && Objects.equals(this.permissions, that.permissions);
+
+          // If both files reside in the same type of file store, compare the last modified time;
+          // if in different file stores, can't make reliable assertions regarding time.
+          boolean lastModifiedTimeEqual;
+          if (this.fileStoreType.equals(that.fileStoreType)) {
+            // Windows, at least, doesn't copy lastModifiedTime for non-files
+            lastModifiedTimeEqual =
+                !this.types.contains(FileType.FILE) || equalsWithinCommonResolution(this.lastModifiedTime, that.lastModifiedTime);
+          } else {
+            LOGGER.trace("Skipping time comparison: {} != {}", this.fileStoreType, that.fileStoreType);
+            lastModifiedTimeEqual = true;   // Don't fail if file stores are different
+          }
+
+          // If both files reside in a file store supporting "dos", compare DOS attributed
+          boolean dosAttributesEqual;
+          if (this.attributeViews.contains("dos") && that.attributeViews.contains("dos")) {
+            dosAttributesEqual = Objects.equals(this.isReadOnly, that.isReadOnly)
+                && Objects.equals(this.isSystem, that.isSystem)
+                && Objects.equals(this.isHidden, that.isHidden)
+                && Objects.equals(this.isArchive, that.isArchive);
+          } else {
+            LOGGER.trace("Skipping 'dos' attributes comparison: {} / {}", this.attributeViews, that.attributeViews);
+            dosAttributesEqual = true;    // Don't fail if file stores are different
+          }
+
+          // If both files reside in a file store supporting "posix", compare Posix attributes
+          boolean posixAttributesEqual;
+          if (this.attributeViews.contains("posix") && that.attributeViews.contains("posix")) {
+            posixAttributesEqual = Objects.equals(this.permissions, that.permissions);
+          } else {
+            LOGGER.trace("Skipping 'posix' attributes comparison: {} / {}", this.attributeViews, that.attributeViews);
+            posixAttributesEqual = true;    // Don't fail if file stores are different
+          }
+
+          return lastModifiedTimeEqual && dosAttributesEqual && posixAttributesEqual;
         }
       }
 
       return true;
     }
 
+    /**
+     * Tests the equality of two {@link FileTime} instances to the lowest resolution common between the two values.
+     * @param a the first {@code FileTime} to compare
+     * @param b the second {@code FileTime} to compare
+     * @return {@code true} if {@code a} and {@code b} are equal within the lowest common resolution
+     */
+    private static boolean equalsWithinCommonResolution(FileTime a, FileTime b) {
+      if (Objects.equals(a, b)) {
+        return true;
+      } else {
+        TemporalUnit aResolution = calculateResolution(a);
+        TemporalUnit bResolution = calculateResolution(b);
+        Instant aInstant = a.toInstant();
+        Instant bInstant = b.toInstant();
+        int aVsB = Comparator.comparing(TemporalUnit::getDuration).compare(aResolution, bResolution);
+        if (aVsB < 0) {
+          // b has a lower resolution than a; truncate to b's resolution
+          aInstant = aInstant.truncatedTo(bResolution);
+        } else if (aVsB > 0) {
+          // a has a lower resolution than b; truncate to a's resolution
+          bInstant = bInstant.truncatedTo(aResolution);
+        }
+        return Objects.equals(aInstant, bInstant);
+      }
+    }
+
+    /**
+     * Timestamp resolution for NTFS.
+     * @see <a href="https://learn.microsoft.com/en-us/windows/win32/sysinfo/file-times">File Times</a>
+     */
+    private static final TemporalUnit NTFS_RESOLUTION = new TemporalUnit() {
+      private final Duration duration = Duration.ofNanos(100L);
+
+      @Override
+      public Duration getDuration() {
+        return duration;
+      }
+
+      @Override
+      public boolean isDurationEstimated() {
+        return false;
+      }
+
+      @Override
+      public boolean isDateBased() {
+        return false;
+      }
+
+      @Override
+      public boolean isTimeBased() {
+        return true;
+      }
+
+      @SuppressWarnings("unchecked")
+      @Override
+      public <R extends Temporal> R addTo(R temporal, long amount) {
+        return (R) temporal.plus(amount, this);
+      }
+
+      @Override
+      public long between(Temporal temporal1Inclusive, Temporal temporal2Exclusive) {
+        return temporal1Inclusive.until(temporal2Exclusive, this);
+      }
+
+      @Override
+      public String toString() {
+        return "NTFS";
+      }
+    };
+
+    /**
+     * Ordered set of <i>supported</i> {@link FileTime} resolutions.
+     */
+    private static final Set<TemporalUnit> RESOLUTIONS;
+    static {
+      // Ordered as required for testing/discovery
+      Set<TemporalUnit> resolutions = new LinkedHashSet<>();
+      resolutions.add(ChronoUnit.SECONDS);
+      resolutions.add(ChronoUnit.MILLIS);
+      resolutions.add(ChronoUnit.MICROS);
+      resolutions.add(NTFS_RESOLUTION);
+      resolutions.add(ChronoUnit.NANOS);
+      RESOLUTIONS = Collections.unmodifiableSet(resolutions);
+    }
+
+    /**
+     * Calculates the resolution of the {@code FileTime} provided.
+     * @param fileTime the {@code FileTime} for which the resolution is determined
+     * @return the {@code TemporalUnit} describing the resolution of {@code fileTime}
+     */
+    private static TemporalUnit calculateResolution(FileTime fileTime) {
+      Instant instant = fileTime.toInstant();
+      for (TemporalUnit unit : RESOLUTIONS) {
+        if (instant.equals(instant.truncatedTo(unit))) {
+          return unit;
+        }
+      }
+      return ChronoUnit.MINUTES;      // Use MINUTES if no other resolution fits
+    }
+
+    /**
+     * Determine what {@code FileAttributeView} types are supported for a path.
+     *
+     * @param fullPath  the fully-qualified path to interrogate
+     * @param fileStore the {@code FileStore} holding {@code fullPath}
+     * @return the set of supported views
+     */
+    private Set<String> supportedAttributeViews(Path fullPath, FileStore fileStore) {
+      return fullPath.getFileSystem().supportedFileAttributeViews().stream()
+          .filter(fileStore::supportsFileAttributeView)
+          .collect(collectingAndThen(toSet(), Collections::unmodifiableSet));
+    }
+
     @Override
     public String toString() {
       return "PathDetails{" +
           "path=" + path +
+          ", fileStoreType=" + fileStoreType +
+          ", attributeViews=" + attributeViews +
           ", types=" + types +
           ", size=" + size +
           ", isReadOnly=" + isReadOnly +

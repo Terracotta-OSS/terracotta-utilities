@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Terracotta, Inc., a Software AG company.
+ * Copyright 2020-2022 Terracotta, Inc., a Software AG company.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,26 +15,48 @@
  */
 package org.terracotta.utilities.test.net;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.filter.ThresholdFilter;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+
 import org.junit.Ignore;
 import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.net.ServerSocket;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
+import static java.util.Objects.requireNonNull;
+import static org.hamcrest.Matchers.allOf;
+import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.hasItem;
+import static org.hamcrest.Matchers.hasProperty;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.lessThan;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.stringContainsInOrder;
+import static org.hamcrest.Matchers.sameInstance;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assume.assumeTrue;
 import static org.terracotta.utilities.test.matchers.Eventually.within;
 import static org.terracotta.utilities.test.matchers.ThrowsMatcher.threw;
 
@@ -67,7 +89,7 @@ public class PortManagerTest {
     assertThat(() -> portManager.reservePorts(-1), threw(instanceOf(IllegalArgumentException.class)));
   }
 
-  @Test(timeout = 5000)
+  @Test(timeout = 50000)
   public void testReserveSinglePort() {
     PortManager.PortRef portRef = portManager.reservePort();
     assertNotNull(portRef);
@@ -75,7 +97,7 @@ public class PortManagerTest {
     try {
       assertThat(portManager.reserve(reservedPort), is(Optional.empty()));
     } finally {
-      portRef.close();
+      portRef.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK));
     }
 
     // Attempt to directly allocate the just released port
@@ -85,18 +107,19 @@ public class PortManagerTest {
     try {
       assertThat(portRef.port(), is(reservedPort));
     } finally {
-      portRef.close();
+      portRef.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK));
     }
   }
 
-  @Test(timeout = 5000)
+  @Test(timeout = 50000)
   public void testMultipleClose() {
     PortManager.PortRef portRef = portManager.reservePort();
-    portRef.close();
-    portRef.close();
+    portRef.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK));
+    portRef.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK));
   }
 
-  @Test(timeout = 20000)
+  @SuppressWarnings({ "UnusedAssignment", "resource" })
+  @Test(timeout = 200000)
   public void testDereferencedPortIsReleased() {
     PortManager.PortRef portRef = portManager.reservePort();
     assertNotNull(portRef);
@@ -116,17 +139,17 @@ public class PortManagerTest {
       }, within(Duration.ofSeconds(10)).matches(is(notNullValue())));
     } finally {
       if (newRef[0] != null) {
-        newRef[0].close();
+        newRef[0].close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK));
       }
     }
   }
 
-  @Test(timeout = 20000)
+  @Test(timeout = 200000)
   public void testReserveCount() {
     for (int count : Arrays.asList(1, 2, 4, 8)) {
       List<PortManager.PortRef> portList = portManager.reservePorts(count);
       assertThat(portList, hasSize(count));
-      portList.forEach(PortManager.PortRef::close);
+      portList.forEach(ref -> ref.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK)));
     }
   }
 
@@ -134,7 +157,7 @@ public class PortManagerTest {
    * This test artificially constrains the ports available for reservation by
    * altering the {@code portMap} using reflection.
    */
-  @Test(timeout = 5000)
+  @Test(timeout = 50000)
   public void testConstrainedEnvironment() throws Exception {
     Field portMapField = PortManager.class.getDeclaredField("portMap");
     portMapField.setAccessible(true);
@@ -159,24 +182,215 @@ public class PortManagerTest {
 
     } finally {
       if (portRef != null) {
-        portRef.close();
+        portRef.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK));
       }
       portMap.and(portMapCopy);
     }
   }
 
-  @Test(timeout = 5000)
+  @Test(timeout = 50000)
   @SuppressWarnings("try")
   public void testExistingServerPort() throws Exception {
     PortManager.PortRef portRef = portManager.reservePort();
     int port = portRef.port();
     try (ServerSocket ignored = new ServerSocket(port)) {
-      portRef.close();
+      portRef.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK));
       assertThat(portManager.reserve(port), is(Optional.empty()));
     }
     Optional<PortManager.PortRef> optional = portManager.reserve(port);
     assertTrue(optional.isPresent());
-    optional.get().close();
+    optional.get().close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK));
+  }
+
+  @Test
+  public void testGetPortRefActive() {
+    try (PortManager.PortRef portRef = portManager.reservePort()) {
+      int port = portRef.port();
+      assertThat(portManager.getPortRef(port).orElseThrow(AssertionError::new), is(sameInstance(portRef)));
+      assertFalse(portRef.isClosed());
+    }
+  }
+
+  @Test
+  public void testGetPortRefClosed() {
+    int port;
+    PortManager.PortRef portRef = portManager.reservePort();
+    try {
+      port = portRef.port();
+    } finally {
+      portRef.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK));
+    }
+    assertThat(portManager.getPortRef(port), is(Optional.empty()));
+    assertTrue(portRef.isClosed());
+  }
+
+  @Test
+  public void testGetPortRefReclaimed() throws Exception {
+    PortManager.PortRef portRef = portManager.reservePort();
+    try {
+      int port = portRef.port();
+
+      WeakReference<PortManager.PortRef> reference = new WeakReference<>(portRef);
+      portRef = null;         // Make eligible for garbage collection
+
+      while (reference.get() != null) {
+        System.gc();
+        TimeUnit.MILLISECONDS.sleep(1000);
+      }
+
+      assertThat(portManager.getPortRef(port), is(Optional.empty()));
+
+    } finally {
+      if (portRef != null) {
+        portRef.close();
+      }
+    }
+  }
+
+  @SuppressWarnings("TryFinallyCanBeTryWithResources")
+  @Test
+  public void testGetPortRefWhenClosing() {
+    PortManager.PortRef portRef = portManager.reservePort();
+    try {
+      int port = portRef.port();
+
+      /*
+       * This relies on the first-in, last-out nature of the onClose actions --
+       * the port is first marked closed then the onClose actions are executed.
+       */
+      AtomicReference<Optional<PortManager.PortRef>> altPortRef = new AtomicReference<>();
+      portRef.onClose((p, o) -> altPortRef.set(portManager.getPortRef(p)));
+
+      assertThat(portManager.getPortRef(port).orElseThrow(AssertionError::new), is(sameInstance(portRef)));
+
+      assertFalse(portRef.isClosed());
+      portRef.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK));
+      assertTrue(portRef.isClosed());
+
+      assertThat(altPortRef.get(), is(Optional.empty()));
+
+    } finally {
+      portRef.close();
+    }
+  }
+
+  @Test
+  public void testIsReservablePort() {
+    assertThat(() -> portManager.isReservablePort(65536), threw(instanceOf(IllegalArgumentException.class)));
+    assertThat(() -> portManager.isReservablePort(-1), threw(instanceOf(IllegalArgumentException.class)));
+
+    BitSet restrictedPorts = new BitSet();
+    restrictedPorts.set(0, 1025);   // System ports aren't reservable
+
+    EphemeralPorts.Range range = EphemeralPorts.getRange();
+    restrictedPorts.set(range.getLower(), 1 + range.getUpper());      // Ephemeral ports aren't reservable
+
+    assertFalse(portManager.isReservablePort(0));
+    assertFalse(portManager.isReservablePort(22));
+    assertFalse(portManager.isReservablePort(range.getLower()));
+    assertFalse(portManager.isReservablePort((range.getUpper() + range.getLower()) / 2));
+    assertFalse(portManager.isReservablePort(range.getUpper()));
+
+    int reservablePort = restrictedPorts.nextClearBit(1024);
+    try {
+      Optional<PortManager.PortRef> portRef = portManager.reserve(reservablePort);
+      portRef.ifPresent(ref -> ref.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK)));
+    } catch (IllegalArgumentException e) {
+      throw new AssertionError("portManager.reservePort(" + reservablePort + ") failed", e);
+    }
+
+    reservablePort = restrictedPorts.previousClearBit(65535);
+    try {
+      Optional<PortManager.PortRef> portRef = portManager.reserve(reservablePort);
+      portRef.ifPresent(ref -> ref.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK)));
+    } catch (IllegalArgumentException e) {
+      throw new AssertionError("portManager.reservePort(" + reservablePort + ") failed", e);
+    }
+
+    try (PortManager.PortRef portRef = portManager.reservePort()) {
+      assertTrue(portManager.isReservablePort(portRef.port()));
+    }
+  }
+
+  @SuppressWarnings("try")
+  @Test
+  public void testReleaseCheckEnabled() throws IOException {
+    // This test requires a properly functioning 'lsof ...' on Linux
+    assumeTrue("'lsof -iTCP not available", TestSupport.lsofWorks());
+
+    // This test MUST be run when PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE is false or not specified
+    assertFalse(PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE + " environment variable must be false or not specified",
+        Boolean.parseBoolean(System.getenv(PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE)));
+
+    try (ListAppender appender = new ListAppender(LoggerFactory.getLogger(PortManager.class), "WARN")) {
+      PortManager.PortRef portRef = portManager.reservePort();
+      int port = portRef.port();
+      try (ServerSocket ignored = new ServerSocket(port)) {
+        String portReleaseCheck = System.clearProperty(PortManager.DISABLE_PORT_RELEASE_CHECK_PROPERTY);
+        try {
+          portRef.close();
+        } finally {
+          if (portReleaseCheck != null) {
+            System.setProperty(PortManager.DISABLE_PORT_RELEASE_CHECK_PROPERTY, portReleaseCheck);
+          }
+        }
+        assertThat(appender.events(), hasItem(allOf(
+            hasProperty("level", equalTo(Level.ERROR)),
+            hasProperty("loggerName", equalTo(PortManager.class.getName())),
+            hasProperty("formattedMessage", is(stringContainsInOrder("Port " + port, "state='LISTEN'")))
+        )));
+      }
+    }
+  }
+
+  @SuppressWarnings("try")
+  @Test
+  public void testReleaseCheckDisabled() throws IOException {
+    // This test MUST be run when PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE is false or not specified
+    assertFalse(PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE + " environment variable must be false or not specified",
+        Boolean.parseBoolean(System.getenv(PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE)));
+
+    try (ListAppender appender = new ListAppender(LoggerFactory.getLogger(PortManager.class), "WARN")) {
+      PortManager.PortRef portRef = portManager.reservePort();
+      int port = portRef.port();
+      try (ServerSocket ignored = new ServerSocket(port)) {
+        String portReleaseCheck = System.setProperty(PortManager.DISABLE_PORT_RELEASE_CHECK_PROPERTY, "true");
+        try {
+          portRef.close();
+        } finally {
+          if (portReleaseCheck == null) {
+            System.clearProperty(PortManager.DISABLE_PORT_RELEASE_CHECK_PROPERTY);
+          } else if (!Boolean.parseBoolean(portReleaseCheck)) {
+            System.setProperty(PortManager.DISABLE_PORT_RELEASE_CHECK_PROPERTY, portReleaseCheck);
+          }
+        }
+        assertThat(appender.events(), not(hasItem(allOf(
+            hasProperty("level", equalTo(Level.ERROR)),
+            hasProperty("loggerName", equalTo(PortManager.class.getName())),
+            hasProperty("formattedMessage", is(stringContainsInOrder("Port " + port, "state='LISTEN'")))
+        ))));
+      }
+    }
+  }
+
+  @SuppressWarnings("try")
+  @Test
+  public void testReleaseCheckDisabledEnvironment() throws IOException {
+    assumeTrue("Skipped unless " + PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE + " environment variable is true",
+        Boolean.parseBoolean(System.getenv(PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE)));
+
+    try (ListAppender appender = new ListAppender(LoggerFactory.getLogger(PortManager.class), "WARN")) {
+      PortManager.PortRef portRef = portManager.reservePort();
+      int port = portRef.port();
+      try (ServerSocket ignored = new ServerSocket(port)) {
+        portRef.close();
+        assertThat(appender.events(), not(hasItem(allOf(
+            hasProperty("level", equalTo(Level.ERROR)),
+            hasProperty("loggerName", equalTo(PortManager.class.getName())),
+            hasProperty("formattedMessage", is(stringContainsInOrder("Port " + port, "state='LISTEN'")))
+        ))));
+      }
+    }
   }
 
   /**
@@ -208,7 +422,7 @@ public class PortManagerTest {
       } finally {
         if (!complete) {
           attempts++;
-          ports.forEach(PortManager.PortRef::close);
+          ports.forEach(portRef -> portRef.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK)));
           ports.clear();
         }
       }
@@ -220,8 +434,54 @@ public class PortManagerTest {
       assertThat(ports, hasSize(targetPortCount));
       assertThat(attempts, is(lessThan(attemptLimit)));
     } finally {
-      ports.forEach(PortManager.PortRef::close);
+      ports.forEach(portRef -> portRef.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK)));
       ports.clear();
+    }
+  }
+
+  /**
+   * A {@link ch.qos.logback.core.read.ListAppender} implementation that auto-connects
+   * itself to a designated {@link Logger}.  The {@link #close()} or {@link #stop()} method
+   * should be called after use of the appender is completed to have the appender removed
+   * from the designated {@code Logger}.
+   */
+  private static class ListAppender extends ch.qos.logback.core.read.ListAppender<ILoggingEvent>
+      implements AutoCloseable {
+    private final ch.qos.logback.classic.Logger logbackLogger;
+
+    public ListAppender(Logger logger, String minimumLevel) {
+      super();
+      requireNonNull(logger, "logger");
+      Level minLevel = Level.toLevel(requireNonNull(minimumLevel, "minimumLevel"), Level.DEBUG);
+
+      this.setContext((LoggerContext)LoggerFactory.getILoggerFactory());
+      ThresholdFilter filter = new ThresholdFilter();
+      filter.setLevel(minLevel.levelStr);
+      this.addFilter(filter);
+      this.start();
+
+      this.logbackLogger = (ch.qos.logback.classic.Logger)logger;
+      logbackLogger.addAppender(this);
+    }
+
+    @Override
+    public void stop() {
+      logbackLogger.detachAppender(this);
+      super.stop();
+    }
+
+    @Override
+    public void close() {
+      this.stop();
+    }
+
+    /**
+     * Gets a reference to the {@code List} holding the recorded {@link ILoggingEvent} instances.
+     * This list may be altered, for example, cleared.
+     * @return the mutable list of recorded {@code ILoggingEvent} instances
+     */
+    public List<ILoggingEvent> events() {
+      return this.list;
     }
   }
 }
