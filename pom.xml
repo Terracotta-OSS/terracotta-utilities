@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Copyright 2020 Terracotta, Inc., a Software AG company.
+  Copyright 2020-2023 Terracotta, Inc., a Software AG company.
 
   Licensed under the Apache License, Version 2.0 (the "License");
   you may not use this file except in compliance with the License.
@@ -188,7 +188,7 @@
         </plugin>
         <plugin>
           <artifactId>maven-surefire-plugin</artifactId>
-          <version>3.0.0-M4</version>
+          <version>3.1.2</version>
           <configuration>
             <trimStackTrace>false</trimStackTrace>
           </configuration>
