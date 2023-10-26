@@ -36,7 +36,6 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
-import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.security.SecureRandom;
 import java.util.ArrayList;
@@ -593,7 +592,7 @@ public class PortManager {
   @SuppressWarnings("removal")    // Needed for Java 17
   private static void disablePortReleaseCheck() {
     try {
-      AccessController.doPrivileged(
+      java.security.AccessController.doPrivileged(
           (PrivilegedAction<String>)() -> System.setProperty(DISABLE_PORT_RELEASE_CHECK_PROPERTY, "true"));
       LOGGER.warn("Further use of diagnostic busy port check in this JVM disabled");
     } catch (SecurityException exception) {
