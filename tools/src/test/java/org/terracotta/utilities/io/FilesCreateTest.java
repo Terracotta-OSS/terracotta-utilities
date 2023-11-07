@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 Terracotta, Inc., a Software AG company.
+ * Copyright 2022-2023 Terracotta, Inc., a Software AG company.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -56,7 +56,6 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assume.assumeFalse;
 import static org.junit.Assume.assumeTrue;
 import static org.terracotta.utilities.test.matchers.ThrowsMatcher.threw;
 
@@ -286,7 +285,10 @@ public class FilesCreateTest extends FilesTestBase {
             compile("-((cp)|(classpath))=.*"),
             compile(quote("-Dvisualvm.id=") + ".*"),
             compile(quote("-Didea.test.cyclic.buffer.size=") + ".*"),
-            compile("-javaagent:.*[/\\\\]idea_rt\\.jar=.*"))
+            compile("-javaagent:.*[/\\\\]idea_rt\\.jar=.*"),
+            compile("-Djava\\.security\\.manager=.*"),
+            compile("-Dorg\\.gradle\\.*")
+        )
         .map(Pattern::asPredicate).collect(toSet());
     List<String> jvmArguments = ManagementFactory.getRuntimeMXBean().getInputArguments().stream()
         .filter(a -> exclusions.stream().noneMatch(p -> p.test(a)))

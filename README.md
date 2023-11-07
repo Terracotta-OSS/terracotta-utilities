@@ -8,12 +8,12 @@ This project operates under the following constraints:
 1. **Changes must not be _breaking_**; programs built to compile and run
     using version 0.0.1 artifacts from this project must be able to 
     compile and run with version 0.0.2 artifacts from this project.
-1. **This project should not be _branched_**.  Maintaining multiple versions
+2. **This project should not be _branched_**.  Maintaining multiple versions
     of this project is not desirable.    
-1. The `tools` module may not rely on any third-party artifacts other than:
+3. The `tools` module may not rely on any third-party artifacts other than:
     * `org.slf4j:slf4j-api`
     * `com.github.spotbugs:spotbugs-annotations`
-1. The `test-tools` module may rely on test-support artifacts in 
+4. The `test-tools` module may rely on test-support artifacts in 
     common use though these artifacts should generally be optional
     for consumers of the `test-tools` module.  For example, the
     following artifacts might be used:
@@ -24,9 +24,3 @@ This project operates under the following constraints:
     If an artifact on which `test-tools` relies makes a breaking change,
     introduce new artifact containing the breaking components -- not a 
     new version of the `test-tools` artifact. 
-
-## Notes
-
-* While the project is currently designed to produce artifacts operable under Java 8, the complete Javadoc
-  will not be produced unless a Java 11 runtime is used during the build.  (The plugin used to generate
-  diagrams included in the Javadoc requires running under Java 11.)
