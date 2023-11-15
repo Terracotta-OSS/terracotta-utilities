@@ -224,12 +224,21 @@
           <configuration>
             <excludes>
               <exclude>.mvn/wrapper/maven-wrapper.properties</exclude>
+              <exclude>.mvn/.gradle-enterprise/**</exclude>
+              <exclude>.mvn/extensions.xml</exclude>
+              <exclude>gradle/wrapper/gradle-wrapper.properties</exclude>
+              <exclude>buildSrc/.gradle/**</exclude>
+              <exclude>buildSrc/**/org.terracotta.java-conventions.gradle.kts</exclude>
               <exclude>README.md</exclude>
               <exclude>LICENSE-*</exclude>
               <exclude>NOTICE-*</exclude>
               <exclude>src/main/java/org/terracotta/org/junit/**</exclude>
               <exclude>src/test/java/org/terracotta/org/junit/**</exclude>
               <exclude>.github/**</exclude>
+              <exclude>gradle.properties</exclude>
+              <exclude>settings.gradle.kts</exclude>
+              <exclude>**/build.gradle.kts</exclude>
+              <exclude>build/**</exclude>
             </excludes>
           </configuration>
         </plugin>

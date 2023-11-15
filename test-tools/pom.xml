@@ -49,6 +49,10 @@
       <artifactId>slf4j-api</artifactId>
     </dependency>
     <dependency>
+      <groupId>com.github.spotbugs</groupId>
+      <artifactId>spotbugs-annotations</artifactId>
+    </dependency>
+    <dependency>
       <!-- Dependency needed when ConsoleAppenderCapture is used. -->
       <groupId>ch.qos.logback</groupId>
       <artifactId>logback-core</artifactId>
@@ -110,6 +114,8 @@
         <artifactId>apache-rat-plugin</artifactId>
         <configuration>
           <excludes>
+            <exclude>build/**</exclude>
+            <exclude>build.gradle.kts</exclude>
             <exclude>README.md</exclude>
             <!-- Exclude content imported from JUnit -->
             <exclude>LICENSE-*</exclude>

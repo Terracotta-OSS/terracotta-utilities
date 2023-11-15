@@ -18,10 +18,12 @@ package org.terracotta.utilities.io.buffer;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.rules.TestName;
+import org.terracotta.utilities.test.ByteCodeVersion;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.lang.management.ManagementFactory;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.List;
@@ -67,6 +69,9 @@ public class AbstractDumpUtilityTest {
   public void prepare() {
     if (DIAGNOSTICS_ENABLED) {
       System.out.format("%n%s%n", testName.getMethodName());
+      System.out.format("DumpUtility.class compiled with %s%n", ByteCodeVersion.fromClass(DumpUtility.class));
+      System.out.format("Current JVM = %s%n", System.getProperty("java.runtime.version", System.getProperty("java.version")));
+      System.out.format("JVM options: %s%n", ManagementFactory.getRuntimeMXBean().getInputArguments());
     }
   }
 
