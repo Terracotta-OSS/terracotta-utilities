@@ -4,6 +4,7 @@
  */
 val userHome: String? = System.getProperty("user.home")
 if (userHome.isNullOrEmpty() || userHome.equals("?")) {
+    val userName = System.getProperty("user.name", "ci")
     val home = System.getenv("HOME")
     if (home.isNullOrEmpty()) {
         throw IllegalStateException("environment variable \"HOME\" must be set when user.home='${userHome}'")
@@ -14,15 +15,18 @@ if (userHome.isNullOrEmpty() || userHome.equals("?")) {
      */
     logger.quiet("Setting user.home=\"${home}\"")
     System.setProperty("user.home", home)
+    System.setProperty("user.name", userName)
 
     gradle.allprojects {
         tasks.withType<Test> {
             logger.quiet("Setting ${this.path} user.home=\"${home}\"")
             systemProperty("user.home", home)
+            systemProperty("user.name", userName)
         }
         tasks.withType<JavaExec> {
             logger.quiet("Setting ${this.path} user.home=\"${home}\"")
             systemProperty("user.home", home)
+            systemProperty("user.name", userName)
         }
     }
 } else {
