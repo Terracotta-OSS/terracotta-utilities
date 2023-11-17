@@ -9,7 +9,6 @@ on:
     # put here a list of branches like master, release/x.y, or any branch name activated for building. This also applies to forks.
     branches:
       - master
-      - ga # required at the moment until this PR is merged, to verify it works in my fork. Can be removed after once GA build integration is finished.
 jobs:
   event_file:
     name: "Publish Github Event Information"
@@ -44,16 +43,16 @@ jobs:
           distribution: ${{matrix.distribution}}
       - name: Install lsof
         run: yum -y install lsof procps
-      - name: Test with Maven
-        run: ./mvnw clean verify -V -B "-Dmaven.artifact.threads=64" "-Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn" -DskipToolchain "-Djava.version=${{matrix.java}}" "-Dmaven.javadoc.skip"
+      - name: Test with Gradle
+        run: ./gradlew --show-version check
       - name: Upload Test Results
         if: always()
         uses: actions/upload-artifact@v2
         with:
           name: Test Results (container almalinux ${{matrix.distribution}}-${{matrix.java}} as root)
           path: |
-            **/target/surefire-reports/**
-            **/target/rat.txt
+            **/build/reports/**
+            **/build/test-results/**
   with-container-user:
     # uncomment to disable this job
     #if: ${{ false }}
@@ -76,20 +75,22 @@ jobs:
         with:
           java-version: ${{matrix.java}}
           distribution: ${{matrix.distribution}}
-      - name: Test with Maven
-        # Note: A long-standing JVM bug outputs '?' for System.getProperty("user.home") when "getpwuid" fails at JVM startup.
-        # This issue is impacting any code computing paths based on "user.home"
-        # A widely known workaround is then to pass it manually.
-        # Details: https://bugs.openjdk.java.net/browse/JDK-8193433
-        run: export MAVEN_OPTS=-Duser.home=$HOME && export JAVA_OPTS=-Duser.home=$HOME && ./mvnw clean verify -V -B "-Dmaven.artifact.threads=64" "-Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn" -DskipToolchain "-Djava.version=${{matrix.java}}" "-Dmaven.javadoc.skip"
+      - name: Test with Gradle
+        # When running in a container using an "anonymous" non-root user, 'user.home' is likely not set to a usable value
+        # and must be set manually. (See https://bugs.openjdk.java.net/browse/JDK-8193433)  Since this task uses an
+        # anonymous non-root user, a Gradle init script is used to set 'user.home' to "$HOME" and amend the testing tasks
+        # to pass that value through to the testing JVMs.
+        run: >
+          java -XshowSettings:all -version &&
+          ./gradlew --show-version --init-script .github/workflows/propagateUserHome.gradle.kts check
       - name: Upload Test Results
         if: always()
         uses: actions/upload-artifact@v2
         with:
           name: Test Results (container almalinux ${{matrix.distribution}}-${{matrix.java}} as user)
           path: |
-            **/target/surefire-reports/**
-            **/target/rat.txt
+            **/build/reports/**
+            **/build/test-results/**
   without-container:
     # uncomment to disable this job
     #if: ${{ false }}
@@ -110,16 +111,17 @@ jobs:
         with:
           java-version: ${{matrix.java}}
           distribution: ${{matrix.distribution}}
-      - name: Test with Maven
-        run: ./mvnw clean verify -V -B "-Dmaven.artifact.threads=64" "-Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn" -DskipToolchain "-Djava.version=${{matrix.java}}" "-Dmaven.javadoc.skip"
+      - name: Test with Gradle
+        # Uses 'build' to include construction of jars and, on Windows, javadoc
+        run: ./gradlew --show-version ${{ startsWith(matrix.os, 'windows') && 'build' || 'build --exclude-task javadoc' }}
       - name: Upload Test Results
         if: always()
         uses: actions/upload-artifact@v2
         with:
           name: Test Results (${{matrix.os}} ${{matrix.distribution}}-${{matrix.java}})
           path: |
-            **/target/surefire-reports/**
-            **/target/rat.txt
+            **/build/reports/**
+            **/build/test-results/**
   # this job will publish test results when the build is executed:
   # - either within someone's fork, for a fork's branch
   # - either for master build
@@ -143,4 +145,5 @@ jobs:
           report_individual_runs: true
           comment_mode: update last
           check_name: Tests Results
-          files: "**/target/surefire-reports/**/*.xml"
+          files: |
+            **/build/test-results/**/*.xml
