@@ -136,6 +136,10 @@ tasks.sourcesJar {
 
 publishing {
     publications.withType<MavenPublication> {
+        suppressPomMetadataWarningsFor("apiElements")
+        suppressPomMetadataWarningsFor("runtimeElements")
+        suppressPomMetadataWarningsFor("logbackApiElements")
+        suppressPomMetadataWarningsFor("logbackRuntimeElements")
         pom {
             licenses {
                 license {

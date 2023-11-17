@@ -166,13 +166,13 @@ tasks {
     }
 
     val versionPattern = Pattern.compile("(?<major>\\d+)\\.(?<minor>\\d+)\\..*")
-    @Throws(InvalidUserCodeException::class)
+    @Throws(InvalidUserDataException::class)
     fun specVersion(version: String) : String {
         val matcher = versionPattern.matcher(version)
         return if (matcher.matches()) {
             matcher.group("major") + "." + matcher.group("minor")
         } else {
-            throw InvalidUserCodeException("Version string \"${version}\" is not in major.minor.<rest> format")
+            throw InvalidUserDataException("Version string \"${version}\" is not in major.minor.<rest> format")
         }
     }
 
