@@ -124,12 +124,20 @@ spotbugs {
     excludeFilter.value(layout.projectDirectory.file("config/spotbugs/excludeFilter.xml"))
 }
 
-tasks.sourcesJar {
+val junitLicense = project.copySpec {
     into("META-INF/licenses/junit/junit") {
         from(layout.projectDirectory) {
             include("*-junit*")
         }
     }
+}
+
+tasks.jar {
+    with(junitLicense)
+}
+
+tasks.sourcesJar {
+    with(junitLicense)
     into("") {
         from(layout.projectDirectory.file("README.md"))
     }
