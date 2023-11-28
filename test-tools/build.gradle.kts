@@ -71,6 +71,8 @@ configurations {
 }
 
 dependencies {
+    implementation(project(":terracotta-utilities-tools"))
+
     "mainApi"("org.hamcrest:hamcrest:${hamcrestVersion}")
     "mainApi"("junit:junit:${junitVersion}") {
         exclude(mapOf("group" to "org.hamcrest"))
