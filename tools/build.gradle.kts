@@ -4,7 +4,8 @@ plugins {
 
 val logbackRangeVersion: String by project
 
-description = "Terracotta Utilities Tools"
+extra["pomName"] = "Terracotta Utilities Tools"
+description = "Utility classes/methods for common Java tasks"
 
 dependencies {
     testImplementation(project(":terracotta-utilities-test-tools"))

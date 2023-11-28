@@ -7,7 +7,8 @@ val hamcrestVersion: String by project
 val junitVersion: String by project
 val slf4jRangeVersion: String by project
 
-description = "Terracotta Utilities Test Tools"
+extra["pomName"] = "Terracotta Utilities Test Tools"
+description = "Utility classes/methods for use in testing"
 
 /*
  * See README.md for a description of the use of the feature/capability and
