@@ -75,6 +75,8 @@ publishing {
 
         pom {
             description.convention(project.provider { project.description })
+            name.convention(project.provider { project.extra["pomName"] as String })
+            url.convention("https://github.com/terracotta-oss/terracotta-utilities/")
 
             licenses {
                 license {

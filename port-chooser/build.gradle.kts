@@ -5,7 +5,8 @@ plugins {
 
 val logbackRangeVersion: String by project
 
-description = "Terracotta Utilities Port Chooser"
+extra["pomName"] = "Terracotta Utilities Port Chooser"
+description = "Utility classes for TCP port management"
 
 dependencies {
     api(project(":terracotta-utilities-tools")) {
