@@ -72,3 +72,15 @@ testing {
         }
     }
 }
+
+/*
+ * Establish a task to run Netstat.
+ * To run, use './gradlew -q runNetstat'.
+ * To run with arguments, use the '--args' option as in './gradlew -q runNetstat --args="135 139"'
+ */
+task<JavaExec>("runNetstat") {
+    group = "execution"
+    description = "Run org.terracotta.utilities.test.net.NetStat.main"
+    mainClass = "org.terracotta.utilities.test.net.NetStat"
+    classpath(sourceSets.test.map { it.runtimeClasspath })
+}
