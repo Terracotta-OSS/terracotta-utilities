@@ -1,6 +1,6 @@
 @ECHO Off
 ::
-:: Copyright 2020 Terracotta, Inc., a Software AG company.
+:: Copyright 2020-2023 Terracotta, Inc., a Software AG company.
 ::
 :: Licensed under the Apache License, Version 2.0 (the "License");
 :: you may not use this file except in compliance with the License.
@@ -23,23 +23,11 @@ PUSHD "%~dp0\..\..\..\.." && (
   POPD
 )
 
-IF NOT DEFINED MAVEN_SETTINGS  SET "MAVEN_SETTINGS=%USERPOFILE%\.m2"
-IF NOT EXIST "%MAVEN_SETTINGS%" (
-  @ECHO Directory "%MAVEN_SETTINGS%" does not exist; set the MAVEN_SETTINGS environment variable to point to the Maven .m2 directory >&2
-  EXIT /B 1
+IF "%1" NEQ "" (
+  SET "args=--args="%*""
+) ELSE (
+  SET args=
 )
-
-SET CLASSPATH=
-FOR %%F IN (
-   "%PROJECT_ROOT%\port-chooser\target\classes" ^
-   "%PROJECT_ROOT%\port-chooser\target\test-classes" ^
-   "%PROJECT_ROOT%\tools\target\classes" ^
-   "%MAVEN_SETTINGS%\repository\org\slf4j\slf4j-api\1.7.25\slf4j-api-1.7.25.jar" ^
-   "%MAVEN_SETTINGS%\repository\ch\qos\logback\logback-classic\1.2.3\logback-classic-1.2.3.jar" ^
-   "%MAVEN_SETTINGS%\repository\ch\qos\logback\logback-core\1.2.3\logback-core-1.2.3.jar"
-) DO SET "CLASSPATH=!CLASSPATH!;%%~F"
-SET "CLASSPATH=%CLASSPATH:~1%"
-
-java org.terracotta.utilities.test.net.NetStat
+"%PROJECT_ROOT%\gradlew.bat" -q runNetstat %args%
 
 EndLocal
