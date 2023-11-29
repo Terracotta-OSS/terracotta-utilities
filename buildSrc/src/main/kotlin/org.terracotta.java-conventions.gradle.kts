@@ -188,7 +188,7 @@ tasks {
                 "Build-Jdk-Spec" to jdkSpec,
                 "Built-By" to System.getProperty("user.name"),
                 "Build-Jdk" to System.getProperty("java.version"),
-                "Specification-Title" to project.description,
+                "Specification-Title" to project.extra["pomName"],
                 "Specification-Version" to specVersion(project.version.toString()),
                 "Implementation-Title" to project.name,
                 "Implementation-Vendor-Id" to project.group,
