@@ -45,4 +45,13 @@ release {
     }
     versionProperties.set(listOf("defaultVersion"))
     tagTemplate.set("v\${version}")
+
+    // work around this issue by tacking on "build" again:
+    // https://github.com/researchgate/gradle-release/blob/af4bf46b/src/main/groovy/net/researchgate/release/ReleasePlugin.groovy#L153
+    buildTasks.set(listOf("build", "publish", "build"))
+    if (project.hasProperty("postReleaseBuildTasks")) {
+        // specify what to do after tagging/building and before updating to a SNAPSHOT version, eg:
+        // ./gradlew release -PpostReleaseBuildTasks="closeSonatypeStagingRepository"
+        buildTasks.addAll((project.property("postReleaseBuildTasks") as String).split(" "))
+    }
 }
