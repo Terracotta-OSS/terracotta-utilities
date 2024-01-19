@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 Terracotta, Inc., a Software AG company.
+ * Copyright 2023-2024 Terracotta, Inc., a Software AG company.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
  */
 package org.terracotta.utilities.test;
 
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.junit.Rule;
 import org.junit.experimental.results.PrintableResult;
 import org.junit.rules.TestName;
@@ -36,10 +37,12 @@ import java.util.Set;
 
 /**
  * Foundation on which to build JUnit test class used to repeat another test.
+ * This tool is used primarily to aid diagnosis of a failing test.
  * <p>
- * To use, implement a concrete class, extending this class, in the same module as the test or
- * test suite to be repeated.  For example, the following concrete class will repeat the
- * <i>parameterized</i> test {@code ClassHoldingTestsToRepeat.testMethodName} for the
+ * To use, implement a concrete JUnit test class, extending {@code AbstractRepeatingTest}, in the same
+ * module as the test or test suite to be repeated with one or more test methods calling a variant of the
+ * {@link #repeatTestRequest repeatTestRequest} method.  For example, the following concrete class will repeat the
+ * <i>parameterized</i> test, {@code ClassHoldingTestsToRepeat.testMethodName}, for the
  * {@code parameterId} parameter set 5000 times or until it fails.
  * <pre><code>
  * public class FooTest extends AbstractRepeatingTest {
@@ -52,10 +55,71 @@ import java.util.Set;
  * }
  * </code></pre>
  *
- * The {@code Request} can be composed of any collection of tests supported by the methods in the {@code Request} class.
+ * While usually used to repeat a single test, the {@code Request} can be composed of any collection of tests
+ * supported by the methods in the {@code Request} class.
+ * <p>
+ * <b>Each variant of the {@code repeatTestRequest} method <i>substitutes</i> "capture" files for {@code System.out}
+ * and {@code System.err} prior to running the test(s).  Tests relying on output to {@code System.out} or
+ * {@code System.err} may be incompatible with this method.</b>
+ * <p>
+ * With each variant of the {@code repeatTestRequest} method, when a test fails:
+ * <ol>
+ *   <li>The JUnit failure summary is emitted to {@code System.out}.</li>
+ *   <li>The captured {@code stdout} content for the failing test(s) is copied to {@code System.out};
+ *      this output is wrapped in marker lines <pre>{@code
+ *        >>> Begin failing stdout
+ *        ...
+ *        <<< End failing stdout
+ *      }</pre></li>
+ *   <li>The captured {@code stderr} content for the failing test(s) is copies to {@code System.err};
+ *       this output is wrapped in marker lines <pre>{@code
+ *         >>> Begin failing stderr
+ *         ...
+ *         <<< End failing stderr
+ *       }</pre></li>
+ *   <li>An {@code AssertionError} is thrown with the failure exception for each failing test present
+ *      as a suppressed exception.</li>
+ * </ol>
+ * <p>
+ * For {@code repeatTestRequest} variants <b>not</b> accepting an {@code AbstractRepeatingRunListener} instance,
+ * each iteration of the test emits progress output to {@code System.out} for each JUnit {@code RunListener} event
+ * raised.  To control that output, use a {@code repeatTestRequest} variant accepting a
+ * <code>Set&lt;{@link ListenerEvents}&gt;</code> or {@link AbstractRepeatingRunListener} instance.
+ * <p>
+ * Variants of {@code repeatTestRequest} accepting a {@link Monitor} instance support pre- and post- test
+ * activities.  While a {@code Monitor} instance does not have access to the JUnit {@code Runner} instances
+ * created for the tests being run, a {@code Monitor} instance can be used for diagnostics.  As an example,
+ * the following {@code Monitor} code emits some off-heap memory information and information regarding
+ * potential {@code Thread} leakage:
+ * <pre><code>
+ *  private static class LocalMonitor extends Monitor {
+ *     private final Set&lt;Thread&gt; expectedThreads = new HashSet&lt;&gt;();
+ *     private final MemoryInfo memoryInfo = MemoryInfo.getInstance();
+ *
+ *     &#x40;Override
+ *     public void before(int iteration) {
+ *       out().format("[%d] [%s] Before test: off-heap=%s (%d)%n",
+ *           iteration, Thread.currentThread(), MemoryInfo.formatSize(memoryInfo.directMemoryInUse()), memoryInfo.directBufferCount());
+ *       expectedThreads.clear();
+ *       expectedThreads.addAll(Arrays.asList(Diagnostics.getAllThreads()));
+ *     }
+ *
+ *     &#x40;Override
+ *     public void after(int iteration, Result result) {
+ *       out().format("[%d] [%s] After test: off-heap=%s (%d)%n",
+ *           iteration, Thread.currentThread(), MemoryInfo.formatSize(memoryInfo.directMemoryInUse()), memoryInfo.directBufferCount());
+ *       if (!expectedThreads.containsAll(Arrays.asList(Diagnostics.getAllThreads()))) {
+ *         Diagnostics.threadDump(out());
+ *       }
+ *     }
+ *   }
+ * }</code></pre>
  *
  * @see <a href="https://junit.org/junit4/javadoc/latest/org/junit/runner/Request.html"><code>org.junit.runner.Request</code></a>
  * @see <a href="https://junit.org/junit4/javadoc/latest/org/junit/runner/notification/RunListener.html">org.junit.runner.notification.RunListener</a>
+ * @see AbstractRepeatingRunListener
+ * @see ListenerEvents
+ * @see Monitor
  */
 public abstract class AbstractRepeatingTest {
   @Rule
@@ -72,37 +136,16 @@ public abstract class AbstractRepeatingTest {
    * <p>
    * <b>This method <i>substitutes</i> "capture" files for {@code System.out} and {@code System.err}.
    * Tests relying on output to {@code System.out} or {@code System.err} may be incompatible with this method.</b>
-   * <p>
-   * If a test fails,
-   * <ol>
-   *   <li>The JUnit failure summary is emitted to {@code System.out}.</li>
-   *   <li>The captured {@code stdout} content for the failing test(s) is copied to {@code System.out};
-   *      this output is wrapped in marker lines <pre>{@code
-   *        >>> Begin failing stdout
-   *        ...
-   *        <<< End failing stdout
-   *      }</pre></li>
-   *   <li>The captured {@code stderr} content for the failing test(s) is copies to {@code System.err};
-   *       this output is wrapped in marker lines <pre>{@code
-   *         >>> Begin failing stderr
-   *         ...
-   *         <<< End failing stderr
-   *       }</pre></li>
-   *   <li>An {@code AssertionError} is thrown with the failure exception for each failing test present
-   *      as a suppressed exception.</li>
-   * </ol>
-   * <p>
-   * Each successful, skipped, or ignored test execution is recorded to {@code System.out}.
    *
    * @param repeatCount the maximum number of times to repeat the test(s)
-   * @param testMethod  the JUnit {@code Request} identifying the test(s) to run
+   * @param testRequest the non-{@code null} JUnit {@code Request} identifying the test(s) to run
    * @throws IOException if an error is raised while accessing one of the output capture files
    * @throws AssertionError if a test fails; the {@code AssertionError} instance will contain, as
    *      suppressed exceptions, the failure(s) from the tests
    * @see <a href="https://junit.org/junit4/javadoc/latest/org/junit/runner/notification/RunListener.html">org.junit.runner.notification.RunListener</a>
    */
-  protected final void repeatTestRequest(int repeatCount, Request testMethod) throws IOException, AssertionError {
-    repeatTestRequest(repeatCount, testMethod, new LocalListener(System.out, EnumSet.allOf(ListenerEvents.class)));
+  protected final void repeatTestRequest(int repeatCount, Request testRequest) throws IOException, AssertionError {
+    repeatTestRequest(repeatCount, testRequest, new LocalListener(System.out, EnumSet.allOf(ListenerEvents.class)));
   }
 
   /**
@@ -114,31 +157,10 @@ public abstract class AbstractRepeatingTest {
    * <p>
    * <b>This method <i>substitutes</i> "capture" files for {@code System.out} and {@code System.err}.
    * Tests relying on output to {@code System.out} or {@code System.err} may be incompatible with this method.</b>
-   * <p>
-   * If a test fails,
-   * <ol>
-   *   <li>The JUnit failure summary is emitted to {@code System.out}.</li>
-   *   <li>The captured {@code stdout} content for the failing test(s) is copied to {@code System.out};
-   *      this output is wrapped in marker lines <pre>{@code
-   *        >>> Begin failing stdout
-   *        ...
-   *        <<< End failing stdout
-   *      }</pre></li>
-   *   <li>The captured {@code stderr} content for the failing test(s) is copies to {@code System.err};
-   *       this output is wrapped in marker lines <pre>{@code
-   *         >>> Begin failing stderr
-   *         ...
-   *         <<< End failing stderr
-   *       }</pre></li>
-   *   <li>An {@code AssertionError} is thrown with the failure exception for each failing test present
-   *      as a suppressed exception.</li>
-   * </ol>
-   * <p>
-   * Each successful, skipped, or ignored test execution is recorded to {@code System.out}.
    *
    * @param repeatCount the maximum number of times to repeat the test(s)
-   * @param testMethod  the JUnit {@code Request} identifying the test(s) to run
-   * @param enabledEvents the set of {@link ListenerEvents} for which information is written to stdout;
+   * @param testRequest the non-{@code null} JUnit {@code Request} identifying the test(s) to run
+   * @param enabledEvents the non-{@code null} set of {@link ListenerEvents} for which information is written to stdout;
    *                      an empty set suppresses output for all events
    * @throws IOException if an error is raised while accessing one of the output capture files
    * @throws AssertionError if a test fails; the {@code AssertionError} instance will contain, as
@@ -146,9 +168,36 @@ public abstract class AbstractRepeatingTest {
    * @see ListenerEvents
    * @see <a href="https://junit.org/junit4/javadoc/latest/org/junit/runner/notification/RunListener.html">org.junit.runner.notification.RunListener</a>
    */
-  protected final void repeatTestRequest(int repeatCount, Request testMethod, Set<ListenerEvents> enabledEvents)
+  protected final void repeatTestRequest(int repeatCount, Request testRequest, Set<ListenerEvents> enabledEvents)
       throws IOException, AssertionError {
-    repeatTestRequest(repeatCount, testMethod, new LocalListener(System.out, Objects.requireNonNull(enabledEvents)));
+    repeatTestRequest(repeatCount, testRequest, enabledEvents, new Monitor());
+  }
+
+  /**
+   * Repeats the indicated test (or tests) the given number of times or until a test fails.
+   * <p>
+   * This method uses an internal {@link AbstractRepeatingRunListener} implementation to report
+   * <a href="https://junit.org/junit4/javadoc/latest/org/junit/runner/notification/RunListener.html">RunListener</a>
+   * events identified by {@code enabledEvents} to {@code System.out}.
+   * <p>
+   * <b>This method <i>substitutes</i> "capture" files for {@code System.out} and {@code System.err}.
+   * Tests relying on output to {@code System.out} or {@code System.err} may be incompatible with this method.</b>
+   *
+   * @param repeatCount   the maximum number of times to repeat the test(s)
+   * @param testRequest   the non-{@code null} JUnit {@code Request} identifying the test(s) to run
+   * @param enabledEvents the non-{@code null} set of {@link ListenerEvents} for which information is written to stdout;
+   *                      an empty set suppresses output for all events
+   * @param monitor       the non-{@code null} {@code Monitor} instance to receive calls before and after each test
+   *                      instance is run
+   * @throws IOException    if an error is raised while accessing one of the output capture files
+   * @throws AssertionError if a test fails; the {@code AssertionError} instance will contain, as
+   *                        suppressed exceptions, the failure(s) from the tests
+   * @see ListenerEvents
+   * @see <a href="https://junit.org/junit4/javadoc/latest/org/junit/runner/notification/RunListener.html">org.junit.runner.notification.RunListener</a>
+   */
+  protected final void repeatTestRequest(int repeatCount, Request testRequest, Set<ListenerEvents> enabledEvents, Monitor monitor)
+      throws IOException, AssertionError {
+    repeatTestRequest(repeatCount, testRequest, new LocalListener(System.out, Objects.requireNonNull(enabledEvents)), monitor);
   }
 
   /**
@@ -156,30 +205,9 @@ public abstract class AbstractRepeatingTest {
    * <p>
    * <b>This method <i>substitutes</i> "capture" files for {@code System.out} and {@code System.err}.
    * Tests relying on output to {@code System.out} or {@code System.err} may be incompatible with this method.</b>
-   * <p>
-   * If a test fails,
-   * <ol>
-   *   <li>The JUnit failure summary is emitted to {@code System.out}.</li>
-   *   <li>The captured {@code stdout} content for the failing test(s) is copied to {@code System.out};
-   *      this output is wrapped in marker lines <pre>{@code
-   *        >>> Begin failing stdout
-   *        ...
-   *        <<< End failing stdout
-   *      }</pre></li>
-   *   <li>The captured {@code stderr} content for the failing test(s) is copies to {@code System.err};
-   *       this output is wrapped in marker lines <pre>{@code
-   *         >>> Begin failing stderr
-   *         ...
-   *         <<< End failing stderr
-   *       }</pre></li>
-   *   <li>An {@code AssertionError} is thrown with the failure exception for each failing test present
-   *      as a suppressed exception.</li>
-   * </ol>
-   * <p>
-   * Each successful, skipped, or ignored test execution is recorded to {@code System.out}.
    *
    * @param repeatCount the maximum number of times to repeat the test(s)
-   * @param testMethod  the JUnit {@code Request} identifying the test(s) to run
+   * @param testRequest the non-{@code null} JUnit {@code Request} identifying the test(s) to run
    * @param listener the non-{@code null} {@code AbstractRepeatingRunListener} to receive JUnit test events
    * @throws IOException if an error is raised while accessing one of the output capture files
    * @throws AssertionError if a test fails; the {@code AssertionError} instance will contain, as
@@ -187,13 +215,40 @@ public abstract class AbstractRepeatingTest {
    *
    * @see <a href="https://junit.org/junit4/javadoc/latest/org/junit/runner/notification/RunListener.html">org.junit.runner.notification.RunListener</a>
    */
-  protected final void repeatTestRequest(int repeatCount, Request testMethod, AbstractRepeatingRunListener listener)
+  protected final void repeatTestRequest(int repeatCount, Request testRequest, AbstractRepeatingRunListener listener)
+      throws IOException, AssertionError {
+    repeatTestRequest(repeatCount, testRequest, listener, new Monitor());
+  }
+
+  /**
+   * Repeats the indicated test (or tests) the given number of times or until a test fails.
+   * <p>
+   * <b>This method <i>substitutes</i> "capture" files for {@code System.out} and {@code System.err}.
+   * Tests relying on output to {@code System.out} or {@code System.err} may be incompatible with this method.</b>
+   *
+   * @param repeatCount the maximum number of times to repeat the test(s)
+   * @param testRequest the non-{@code null} JUnit {@code Request} identifying the test(s) to run
+   * @param listener    the non-{@code null} {@code AbstractRepeatingRunListener} to receive JUnit test events
+   * @param monitor     the non-{@code null} {@code Monitor} instance to receive calls before and after each test
+   *                    instance is run
+   * @throws IOException    if an error is raised while accessing one of the output capture files
+   * @throws AssertionError if a test fails; the {@code AssertionError} instance will contain, as
+   *                        suppressed exceptions, the failure(s) from the tests
+   * @see <a href="https://junit.org/junit4/javadoc/latest/org/junit/runner/notification/RunListener.html">org.junit.runner.notification.RunListener</a>
+   */
+  protected final void repeatTestRequest(int repeatCount, Request testRequest, AbstractRepeatingRunListener listener, Monitor monitor)
       throws IOException, AssertionError {
     if (repeatCount <= 0) {
       throw new IllegalArgumentException("repeatCount must be a positive integer");
     }
-    Objects.requireNonNull(testMethod, "testMethod cannot be null" );
+    Objects.requireNonNull(testRequest, "testRequest cannot be null" );
     Objects.requireNonNull(listener, "listener cannot be null" );
+    Objects.requireNonNull(monitor, "monitor cannot be null");
+
+    PrintStream stdout = System.out;
+    monitor.setOut(stdout);
+    PrintStream stderr = System.err;
+    monitor.setErr(stderr);
 
     JUnitCore core = new JUnitCore();
     core.addListener(listener);
@@ -213,9 +268,6 @@ public abstract class AbstractRepeatingTest {
         int iteration = i + 1;
         listener.setIteration(iteration);
 
-        PrintStream stdout = System.out;
-        PrintStream stderr = System.err;
-
         System.setOut(captureStdout);
         System.setErr(captureStderr);
 
@@ -225,7 +277,9 @@ public abstract class AbstractRepeatingTest {
 
         Result result;
         try {
-          result = core.run(testMethod);
+          monitor.before(iteration);
+          result = core.run(testRequest);
+          monitor.after(iteration, result);
         } finally {
           System.setErr(stderr);
           System.setOut(stdout);
@@ -337,6 +391,79 @@ public abstract class AbstractRepeatingTest {
         out.format("Tests run=%d, ignored=%d, failed=%d%n",
             result.getRunCount(), result.getIgnoreCount(), result.getFailureCount());
       }
+    }
+  }
+
+  /**
+   * Provides a per-iteration monitor supporting before and after test operations.
+   * An instance of this class may be used for tasks such as:
+   * <ul>
+   *   <li>output tracking information for each test</li>
+   *   <li>monitor test pre-/post-conditions such as memory utilization</li>
+   * </ul>
+   */
+  public static class Monitor {
+
+    private PrintStream stdout;
+    private PrintStream stderr;
+
+    private void setOut(PrintStream stdout) {
+      this.stdout = stdout;
+    }
+
+    /**
+     * Gets the pre-capture value of {@code System.out}.
+     * @return the pre-capture value of {@code System.out}
+     */
+    @SuppressFBWarnings("EI_EXPOSE_REP")
+    public final PrintStream out() {
+      return stdout;
+    }
+
+    private void setErr(PrintStream stderr) {
+      this.stderr = stderr;
+    }
+
+    /**
+     * Gets the pre-capture value of {@code System.err}.
+     * @return the pre-capture value of {@code System.err}
+     */
+    @SuppressFBWarnings("EI_EXPOSE_REP")
+    public final PrintStream err() {
+      return stderr;
+    }
+
+    /**
+     * Called <i>before</i> the test iteration begins.
+     * <p>
+     * Output to {@code System.out} and {@code System.err} will be captured along with the rest of the
+     * test output and only shown in the event of a test failure; output to {@link #out()} and {@link #err()}
+     * is not subject to test output capture.
+     * <p>
+     * If this method throws an exception, test iteration will terminate and the {@code AbstractRepeatingTest}
+     * instance will fail without any output from the repeating tests.
+     *
+     * @param iteration the test iteration number
+     */
+    @SuppressWarnings("unused")
+    public void before(int iteration) {
+    }
+
+    /**
+     * Called <i>after</i> the test iteration begins.
+     * <p>
+     * Output to {@code System.out} and {@code System.err} will be captured along with the rest of the
+     * test output and only shown in the event of a test failure; output to {@link #out()} and {@link #err()}
+     * is not subject to test output capture.
+     * <p>
+     * If this method throws an exception, test iteration will terminate and the {@code AbstractRepeatingTest}
+     * instance will fail without any output from the repeating tests.
+     *
+     * @param iteration the test iteration number
+     * @param result the JUnit {@code Result} instance describing test completion
+     */
+    @SuppressWarnings("unused")
+    public void after(int iteration, Result result) {
     }
   }
 
