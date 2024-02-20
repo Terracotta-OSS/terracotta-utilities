@@ -21,6 +21,9 @@ import org.slf4j.LoggerFactory;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.InvalidObjectException;
+import java.io.ObjectInputStream;
+import java.io.Serializable;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -86,13 +89,16 @@ public final class Shell {
   /**
    * The {@link #execute(Charset, String...)} command execution result.
    */
-  public static final class Result implements Iterable<String> {
-    private final List<String> commandLines;
+  // Java 21 warns of non-Seriazable fields in a Serialization object
+  public static final class Result implements Iterable<String>, Serializable {
+    private static final long serialVersionUID = -5555911693879268481L;
+
+    private final transient List<String> commandLines;
     private final int exitCode;
 
     private Result(int exitCode, List<String> commandLines) {
       this.exitCode = exitCode;
-      this.commandLines = Collections.unmodifiableList(commandLines);
+      this.commandLines = Collections.unmodifiableList(new ArrayList<>(commandLines));
     }
 
     /**
@@ -118,6 +124,32 @@ public final class Shell {
     @Override
     public Iterator<String> iterator() {
       return commandLines.iterator();
+    }
+
+    private void readObject(ObjectInputStream s) throws InvalidObjectException {
+      throw new InvalidObjectException("SerializationProxy expected");
+    }
+
+    private Object writeReplace() {
+      return new SerializationProxy(this);
+    }
+
+    /**
+     * Internal proxy for serialization of {@link Result} instances.
+     */
+    private static final class SerializationProxy implements Serializable {
+      private static final long serialVersionUID = -8686283741098525116L;
+      private final int exitCode;
+      private final ArrayList<String> commandLines;
+
+      SerializationProxy(Result result) {
+        this.exitCode = result.exitCode;
+        this.commandLines = new ArrayList<>(result.commandLines);
+      }
+
+      private Object readResolve() {
+        return new Result(exitCode, commandLines);
+      }
     }
   }
 

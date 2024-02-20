@@ -20,6 +20,9 @@ import com.sun.management.HotSpotDiagnosticMXBean;
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintStream;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.management.BufferPoolMXBean;
 import java.lang.management.LockInfo;
 import java.lang.management.ManagementFactory;
@@ -88,7 +91,7 @@ public final class Diagnostics {
        * terminated, its slot in the returned array is null.
        */
       List<Thread> threadList = new ArrayList<>(threads);
-      long[] threadIds = threadList.stream().mapToLong(Thread::getId).toArray();
+      long[] threadIds = threadList.stream().mapToLong(ThreadId::get).toArray();
       ThreadMXBean threadMXBean = ManagementFactory.getThreadMXBean();
       ThreadInfo[] threadInfos = threadMXBean.getThreadInfo(threadIds, true, true);
       for (int i = 0; i < threadList.size(); i++) {
@@ -102,7 +105,7 @@ public final class Diagnostics {
       if (p.threadInfo == null) {
         Thread t = p.thread;
         printStream.format("\"%s\" Id=%d prio=%d %s%n",
-            t.getName(), t.getId(), t.getPriority(), t.getState());
+            t.getName(), ThreadId.get(t), t.getPriority(), t.getState());
         for (StackTraceElement element : t.getStackTrace()) {
           printStream.format("\tat %s%n", element);
         }
@@ -314,6 +317,17 @@ public final class Diagnostics {
   }
 
   /**
+   * Gets the thread id of the specified thread.  For Java 19+, this method returns the
+   * value of {@code Thread.threadId}; for Java 18-, this method returns the value of
+   * {@code Thread.getId}.
+   * @param thread the {@code thread} for which the id is to be returned
+   * @return the {@code Thread} id; {@code -1} if an error was raised while obtaining the id
+   */
+  public static long threadId(Thread thread) {
+    return ThreadId.get(thread);
+  }
+
+  /**
    * Returns an array contain a reference to all {@link Thread} instances in the JVM.  Since the JVM is
    * not stopped, the returned array may miss threads or have no longer extant threads.
    * @return new array containing a reference to all threads in the JVM, subject to acquisition limitations
@@ -387,6 +401,52 @@ public final class Diagnostics {
    */
   public static MaxDirectMemoryInfo getMaxDirectMemoryInfo() {
     return MaxDirectMemoryInfoHelper.INSTANCE;
+  }
+
+  /**
+   * Handles using the JVM-appropriate method to obtain the id for a {@code Thread}.
+   */
+  private static class ThreadId {
+    private static final MethodHandle THREAD_ID_METHOD;
+
+    static {
+      MethodHandles.Lookup lookup = MethodHandles.publicLookup();
+      MethodType longNiladic = MethodType.methodType(long.class);
+      MethodHandle threadId;
+      try {
+        // Thread.threadId is added in Java 19 as a replacement for Thread.getId
+        threadId = lookup.findVirtual(Thread.class, "threadId", longNiladic);
+      } catch (NoSuchMethodException | IllegalAccessException e) {
+        try {
+          // Thread.getId is deprecated in Java 19
+          threadId = lookup.findVirtual(Thread.class, "getId", longNiladic);
+        } catch (NoSuchMethodException | IllegalAccessException ex) {
+          threadId = MethodHandles.constant(long.class, -1L);
+
+          System.err.format("Failed to create handle for Thread 'id' method; calls to %s.threadId will return -1", Diagnostics.class.getSimpleName());
+          ex.addSuppressed(e);
+          ex.printStackTrace(System.err);
+        }
+      }
+      THREAD_ID_METHOD = threadId;
+    }
+
+    /**
+     * Gets the id of the specified {@code Thread}.
+     * @param t the {@code Thread} for which the id is to be obtained
+     * @return the {@code Thread} id; {@code -1} if there is an error obtaining the {@code Thread} id
+     */
+    private static long get(Thread t) {
+      try {
+        return (long)THREAD_ID_METHOD.invoke(t);
+      } catch (Error e) {
+        throw e;
+      } catch (Throwable throwable) {
+        System.err.format("Failed obtain thread id from %s; returning -1", THREAD_ID_METHOD);
+        throwable.printStackTrace(System.err);
+        return -1L;
+      }
+    }
   }
 
   /**

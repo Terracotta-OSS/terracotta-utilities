@@ -29,6 +29,8 @@ import java.util.List;
 import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CyclicBarrier;
 import java.util.function.Consumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static java.util.stream.Collectors.toList;
 import static org.hamcrest.Matchers.allOf;
@@ -95,6 +97,33 @@ public class DiagnosticsTest {
     assertThat(pid, is(not(-1L)));
     int intPid = Diagnostics.getPid();      // deprecation
     assertThat(intPid, is((int)pid));
+  }
+
+  @Test
+  public void testThreadId() throws Exception {
+    Thread currentThread = Thread.currentThread();
+    long threadId = Diagnostics.threadId(currentThread);
+    assertThat(threadId, is(not(-1L)));
+
+    int javaVersion = 0;
+    Matcher matcher = Pattern.compile("(?<first>\\d+)\\.(?<second>\\d+)\\..*").matcher(System.getProperty("java.version"));
+    if (matcher.matches()) {
+      if (matcher.group("first").equals("1")) {
+        javaVersion = Integer.parseInt(matcher.group("second"));
+      } else {
+        javaVersion = Integer.parseInt(matcher.group("first"));
+      }
+      long id;
+      if (javaVersion >= 19) {
+        // At Java 19, Thread.threadId is added and Thread.getId is deprecated
+        id = (long)Thread.class.getMethod("threadId").invoke(currentThread);
+      } else {
+        id = (long)Thread.class.getMethod("getId").invoke(currentThread);
+      }
+      assertThat(threadId, is(id));
+    } else {
+      fail("Unrecognized 'java.version'=" + System.getProperty("java.version"));
+    }
   }
 
   private List<String> perform(Consumer<PrintStream> task) {

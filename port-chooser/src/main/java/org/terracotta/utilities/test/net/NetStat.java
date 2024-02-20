@@ -15,6 +15,7 @@
  */
 package org.terracotta.utilities.test.net;
 
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.terracotta.utilities.exec.Shell;
@@ -1599,11 +1600,13 @@ public class NetStat {
       this.result = null;
     }
 
+    @SuppressFBWarnings("EI_EXPOSE_REP2")
     public HostExecutionException(String command, Shell.Result result, Throwable cause) {
       super(message(command, result), cause);
       this.result = result;
     }
 
+    @SuppressFBWarnings("EI_EXPOSE_REP2")
     public HostExecutionException(String command, Shell.Result result) {
       super(message(command, result));
       this.result = result;
