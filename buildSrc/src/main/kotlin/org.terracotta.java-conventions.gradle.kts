@@ -112,7 +112,8 @@ tasks {
         options.encoding = "UTF-8"
         options.isDeprecation = true
         options.isWarnings = true
-        options.compilerArgs.addAll(listOf("-Xlint:all", "-Werror"))
+        // '-Xlint:options' needed to ignore warning about source/target Java 8 obsolescence
+        options.compilerArgs.addAll(listOf("-Xlint:all", "-Xlint:-options", "-Werror"))
     }
 
     withType<Javadoc> {
@@ -142,6 +143,19 @@ tasks {
             register("html") {
                 required.set(true)
             }
+        }
+    }
+
+    spotbugsMain {
+        val spotbugsLastCheckLevel = JavaVersion.VERSION_21     // Most current Java version assessed for Spotbugs support
+        val spotbugsSuppressionLevel = JavaVersion.VERSION_21   // Java version at which Spotbugs is suppressed
+        if (JavaVersion.current() > spotbugsLastCheckLevel) {
+            throw GradleException("Current version of Java exceeds Spotbugs suppression level; re-examine Spotbugs suppression", null)
+        } else if (JavaVersion.current() >= spotbugsSuppressionLevel) {
+            logger.warn("Suppressing Spotbugs; current Java Version ${JavaVersion.current()} >= Spotbugs support version ${spotbugsSuppressionLevel}")
+            enabled = false
+        } else {
+            enabled = true
         }
     }
 
