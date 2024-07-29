@@ -1,5 +1,6 @@
 @REM ----------------------------------------------------------------------------
 @REM  Copyright 2020 Terracotta, Inc., a Software AG company.
+@REM  Copyright Super iPaaS Integration LLC, an IBM Company 2024
 @REM
 @REM  Licensed under the Apache License, Version 2.0 (the "License");
 @REM  you may not use this file except in compliance with the License.
