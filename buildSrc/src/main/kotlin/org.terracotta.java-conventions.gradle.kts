@@ -87,8 +87,8 @@ publishing {
             developers {
                 developer {
                     name.convention("Terracotta Engineers")
-                    email.convention("dev-internal@terracottatech.com")
-                    organization.convention("Terracotta Inc., a wholly-owned subsidiary of Software AG USA, Inc.")
+                    email.convention("tc-oss-dg@ibm.com")
+                    organization.convention("Super iPaaS Integration LLC, an IBM Company")
                     organizationUrl.convention("https://terracotta.org")
                 }
             }
