@@ -88,7 +88,7 @@ publishing {
                 developer {
                     name.convention("Terracotta Engineers")
                     email.convention("tc-oss-dg@ibm.com")
-                    organization.convention("Super iPaaS Integration LLC, an IBM Company")
+                    organization.convention("IBM Corp.")
                     organizationUrl.convention("https://terracotta.org")
                 }
             }
