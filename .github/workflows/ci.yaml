@@ -16,7 +16,7 @@ jobs:
     if: ${{ github.event_name == 'pull_request' }}
     steps:
       - name: Upload
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: Event File
           path: ${{ github.event_path }}
@@ -47,7 +47,7 @@ jobs:
         run: ./gradlew --show-version check
       - name: Upload Test Results
         if: always()
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: Test Results (container almalinux ${{matrix.distribution}}-${{matrix.java}} as root)
           path: |
@@ -85,7 +85,7 @@ jobs:
           ./gradlew --show-version --init-script .github/workflows/propagateUserHome.gradle.kts check
       - name: Upload Test Results
         if: always()
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: Test Results (container almalinux ${{matrix.distribution}}-${{matrix.java}} as user)
           path: |
@@ -116,7 +116,7 @@ jobs:
         run: ./gradlew --show-version ${{ startsWith(matrix.os, 'windows') && 'build' || 'build --exclude-task javadoc' }}
       - name: Upload Test Results
         if: always()
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: Test Results (${{matrix.os}} ${{matrix.distribution}}-${{matrix.java}})
           path: |
@@ -136,7 +136,7 @@ jobs:
     if: ${{ github.event_name != 'pull_request' }}
     steps:
       - name: Download Artifacts
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
       - name: Publish Test Results
