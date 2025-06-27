@@ -498,7 +498,10 @@ public class NetStat {
       builder.localEndpoint(BusyPort.IPVersion.IPV4, fields.get(1), fields.get(2));
       builder.remoteEndpoint(BusyPort.IPVersion.IPV4, fields.get(3), fields.get(4));
       builder.state(BusyPort.TcpState.fromMicrosoftString(fields.get(5)));
-      builder.shortCommand(fields.get(6));
+      // The short command may be missing
+      if (fields.size() >= 7) {
+        builder.shortCommand(fields.get(6));
+      }
       // The full command line may be missing ...
       if (fields.size() >= 8) {
         builder.commandLine(fields.get(7));

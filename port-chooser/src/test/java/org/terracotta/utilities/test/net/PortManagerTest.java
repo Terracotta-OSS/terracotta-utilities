@@ -17,14 +17,11 @@
 package org.terracotta.utilities.test.net;
 
 import ch.qos.logback.classic.Level;
-import ch.qos.logback.classic.LoggerContext;
-import ch.qos.logback.classic.filter.ThresholdFilter;
-import ch.qos.logback.classic.spi.ILoggingEvent;
 
 import org.junit.Ignore;
 import org.junit.Test;
-import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.terracotta.utilities.test.logging.ConnectedListAppender;
 
 import java.io.IOException;
 import java.lang.ref.WeakReference;
@@ -40,7 +37,6 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static java.util.Objects.requireNonNull;
 import static org.hamcrest.Matchers.allOf;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasItem;
@@ -323,7 +319,7 @@ public class PortManagerTest {
     assertFalse(PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE + " environment variable must be false or not specified",
         Boolean.parseBoolean(System.getenv(PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE)));
 
-    try (ListAppender appender = new ListAppender(LoggerFactory.getLogger(PortManager.class), "WARN")) {
+    try (ConnectedListAppender appender = ConnectedListAppender.newInstance(LoggerFactory.getLogger(PortManager.class), "WARN")) {
       PortManager.PortRef portRef = portManager.reservePort();
       int port = portRef.port();
       try (ServerSocket ignored = new ServerSocket(port)) {
@@ -351,7 +347,7 @@ public class PortManagerTest {
     assertFalse(PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE + " environment variable must be false or not specified",
         Boolean.parseBoolean(System.getenv(PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE)));
 
-    try (ListAppender appender = new ListAppender(LoggerFactory.getLogger(PortManager.class), "WARN")) {
+    try (ConnectedListAppender appender = ConnectedListAppender.newInstance(LoggerFactory.getLogger(PortManager.class), "WARN")) {
       PortManager.PortRef portRef = portManager.reservePort();
       int port = portRef.port();
       try (ServerSocket ignored = new ServerSocket(port)) {
@@ -380,7 +376,7 @@ public class PortManagerTest {
     assumeTrue("Skipped unless " + PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE + " environment variable is true",
         Boolean.parseBoolean(System.getenv(PortManager.DISABLE_PORT_RELEASE_CHECK_ENV_VARIABLE)));
 
-    try (ListAppender appender = new ListAppender(LoggerFactory.getLogger(PortManager.class), "WARN")) {
+    try (ConnectedListAppender appender = ConnectedListAppender.newInstance(LoggerFactory.getLogger(PortManager.class), "WARN")) {
       PortManager.PortRef portRef = portManager.reservePort();
       int port = portRef.port();
       try (ServerSocket ignored = new ServerSocket(port)) {
@@ -437,52 +433,6 @@ public class PortManagerTest {
     } finally {
       ports.forEach(portRef -> portRef.close(EnumSet.of(PortManager.PortRef.CloseOption.NO_RELEASE_CHECK)));
       ports.clear();
-    }
-  }
-
-  /**
-   * A {@link ch.qos.logback.core.read.ListAppender} implementation that auto-connects
-   * itself to a designated {@link Logger}.  The {@link #close()} or {@link #stop()} method
-   * should be called after use of the appender is completed to have the appender removed
-   * from the designated {@code Logger}.
-   */
-  private static class ListAppender extends ch.qos.logback.core.read.ListAppender<ILoggingEvent>
-      implements AutoCloseable {
-    private final ch.qos.logback.classic.Logger logbackLogger;
-
-    public ListAppender(Logger logger, String minimumLevel) {
-      super();
-      requireNonNull(logger, "logger");
-      Level minLevel = Level.toLevel(requireNonNull(minimumLevel, "minimumLevel"), Level.DEBUG);
-
-      this.setContext((LoggerContext)LoggerFactory.getILoggerFactory());
-      ThresholdFilter filter = new ThresholdFilter();
-      filter.setLevel(minLevel.levelStr);
-      this.addFilter(filter);
-      this.start();
-
-      this.logbackLogger = (ch.qos.logback.classic.Logger)logger;
-      logbackLogger.addAppender(this);
-    }
-
-    @Override
-    public void stop() {
-      logbackLogger.detachAppender(this);
-      super.stop();
-    }
-
-    @Override
-    public void close() {
-      this.stop();
-    }
-
-    /**
-     * Gets a reference to the {@code List} holding the recorded {@link ILoggingEvent} instances.
-     * This list may be altered, for example, cleared.
-     * @return the mutable list of recorded {@code ILoggingEvent} instances
-     */
-    public List<ILoggingEvent> events() {
-      return this.list;
     }
   }
 }
