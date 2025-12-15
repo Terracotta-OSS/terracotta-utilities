@@ -3,9 +3,11 @@ plugins {
 }
 
 val logbackRangeVersion: String by project
+val logbackBaseVersion: String by project
 val hamcrestVersion: String by project
 val junitVersion: String by project
 val slf4jRangeVersion: String by project
+val slf4jBaseVersion:String by project
 
 extra["pomName"] = "Terracotta Utilities Test Tools"
 description = "Utility classes/methods for use in testing"
@@ -72,6 +74,10 @@ configurations {
 
 dependencies {
     implementation(project(":terracotta-utilities-tools"))
+    compileOnly("org.slf4j:slf4j-api:${slf4jBaseVersion}")
+    testImplementation("org.slf4j:slf4j-api:${slf4jBaseVersion}")
+    compileOnly("ch.qos.logback:logback-classic:${logbackBaseVersion}")
+    testImplementation("ch.qos.logback:logback-classic:${logbackBaseVersion}")
 
     "mainApi"("org.hamcrest:hamcrest:${hamcrestVersion}")
     "mainApi"("junit:junit:${junitVersion}") {

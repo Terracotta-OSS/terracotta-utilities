@@ -4,6 +4,7 @@ plugins {
 }
 
 val logbackRangeVersion: String by project
+val logbackBaseVersion: String by project
 
 extra["pomName"] = "Terracotta Utilities Port Chooser"
 description = "Utility classes for TCP port management"
@@ -13,7 +14,7 @@ dependencies {
         exclude(mapOf("group" to "org.slf4j", "module" to "slf4j-api"))
     }
     testImplementation(project(":terracotta-utilities-test-tools"))
-    testImplementation("ch.qos.logback:logback-classic:${logbackRangeVersion}")
+    testImplementation("ch.qos.logback:logback-classic:${logbackBaseVersion}")
 }
 
 testing {

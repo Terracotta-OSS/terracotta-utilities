@@ -3,13 +3,14 @@ plugins {
 }
 
 val logbackRangeVersion: String by project
+val logbackBaseVersion: String by project
 
 extra["pomName"] = "Terracotta Utilities Tools"
 description = "Utility classes/methods for common Java tasks"
 
 dependencies {
     testImplementation(project(":terracotta-utilities-test-tools"))
-    testImplementation("ch.qos.logback:logback-classic:${logbackRangeVersion}")
+    testImplementation("ch.qos.logback:logback-classic:${logbackBaseVersion}")
 }
 
 tasks.rat {
