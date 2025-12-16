@@ -2,9 +2,9 @@ import java.time.Duration
 
 plugins {
     base
-    id("io.github.gradle-nexus.publish-plugin") version "1.3.0"
     id("org.nosphere.apache.rat")
     id("net.researchgate.release") version "3.0.2"
+    id("com.jfrog.artifactory") version "6.0.4"
 }
 
 val defaultVersion: String by project
@@ -25,17 +25,29 @@ tasks {
     }
 }
 
-nexusPublishing {
-    repositories {
-        sonatype {
-            username = sonatypeUser
-            password = sonatypePwd
-        }
+
+allprojects {
+    if (project.hasProperty("overrideVersion")) {
+        project.version = project.property("overrideVersion") as String
+    } else {
+        project.version = project.property("defaultVersion") as String
     }
-    // Sonatype is often very slow in these operations:
-    transitionCheckOptions {
-        delayBetween = Duration.ofSeconds((findProperty("delayBetweenRetriesInSeconds") ?: "10").toString().toLong())
-        maxRetries = (findProperty("numberOfRetries") ?: "100").toString().toInt()
+    
+    // Apply and configure artifactory for subprojects
+    if (project != rootProject) {
+        apply(plugin = "com.jfrog.artifactory")
+        
+        // Wait for maven-publish plugin to be applied by java-conventions
+        pluginManager.withPlugin("maven-publish") {
+            project.tasks.findByPath("publish")?.dependsOn(project.tasks.getByPath("artifactoryPublish"))
+            
+            // Configure artifactory task after evaluation when publications are created
+            afterEvaluate {
+                tasks.withType<org.jfrog.gradle.plugin.artifactory.task.ArtifactoryTask>().configureEach {
+                    publications("maven")
+                }
+            }
+        }
     }
 }
 
@@ -53,5 +65,24 @@ release {
         // specify what to do after tagging/building and before updating to a SNAPSHOT version, eg:
         // ./gradlew release -PpostReleaseBuildTasks="closeSonatypeStagingRepository"
         buildTasks.addAll((project.property("postReleaseBuildTasks") as String).split(" "))
+    }
+}
+
+if (project.hasProperty("overrideVersion")) {
+    tasks.named("artifactoryPublish") {
+        enabled = false
+    }
+
+    artifactory {
+        setContextUrl("https://na.artifactory.swg-devops.com/artifactory")
+        publish(Action<org.jfrog.gradle.plugin.artifactory.dsl.PublisherConfig> {
+            repository(Action<org.jfrog.gradle.plugin.artifactory.dsl.PublisherConfig.Repository> {
+                setRepoKey("hyc-webmriab-team-tc01-os-releases-maven-local")
+                setUsername(project.findProperty("artifactory_user") as? String ?: System.getenv("ARTIFACTORY_DEPLOY_USERNAME"))
+                setPassword(project.findProperty("artifactory_password") as? String ?: System.getenv("ARTIFACTORY_DEPLOY_PASSWORD"))
+            })
+        })
+        clientConfig.info.setBuildName("hyc-webmriab-team-tc01/terracotta/${rootProject.name}")
+        clientConfig.info.setBuildNumber(rootProject.findProperty("buildNumber") as? String ?: "" + java.util.Random(System.currentTimeMillis()).nextInt(20000))
     }
 }
