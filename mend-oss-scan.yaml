@@ -1,0 +1,23 @@
+name: OSS Compliance Scan
+on:
+  workflow_dispatch:  # Run on-demand
+
+jobs:
+  oss-scan:
+    runs-on: [self-hosted, linux]
+    steps:
+      - name: Checkout product repo
+        uses: ibm-webmethods/checkout@v3
+        with:
+          path: product
+          fetch-depth: 1
+
+      - name: Run OSS Scan
+        uses: ibm-webmethods/oss-scan@main
+        with:
+          mend_user_key: ${{ secrets.MEND_USER_KEY }}
+          mend_project_token: ${{ secrets.MEND_PROJECT_TOKEN }}
+          mend_product_token: ${{ secrets.MEND_PRODUCT_TOKEN }}
+          mend_project_name: ${{ secrets.MEND_PROJECT_NAME }}
+          pid: "PRD0013996"  # Your product ID
+          storage_token: ${{ secrets.OSS_SCAN_ARCHIVE_PAT }}
